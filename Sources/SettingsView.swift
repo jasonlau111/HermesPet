@@ -196,6 +196,10 @@ struct SettingsView: View {
 
             Divider()
 
+            ttsSection
+
+            Divider()
+
             // 配置查看器：选哪个 mode 就显示哪个 mode 的配置项（不切换正在进行的对话）
             VStack(alignment: .leading, spacing: 8) {
                 Text("查看配置")
@@ -1357,7 +1361,7 @@ struct SettingsView: View {
                 paletteRow(label: "Claude · Clawd 🦞", mode: .claudeCode)
                 paletteRow(label: "在线 AI · 云朵 ☁️", mode: .directAPI)
                 paletteRow(label: "OpenClaw · fomo 🦊", mode: .openclaw)
-                paletteRow(label: "Hermes · thinking-light", mode: .hermes)
+                paletteRow(label: "Hermes · 小马 🐴", mode: .hermes)
                 paletteRow(label: "Codex · coco 🤖", mode: .codex)
             }
             .padding(12)

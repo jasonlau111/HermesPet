@@ -9,9 +9,6 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "HermesPet",
-            resources: [
-                .process("Resources")
-            ],
             linkerSettings: [
                 .linkedFramework("Carbon")
             ]

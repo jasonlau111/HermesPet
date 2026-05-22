@@ -1198,7 +1198,7 @@ struct DynamicIslandPillView: View {
         case .claudeCode: return "Clawd"
         case .directAPI:  return "云朵"
         case .openclaw:   return "fomo"   // PR-B 上线龙虾 sprite 后正式启用
-        case .hermes:     return "Hermes"
+        case .hermes:     return "小马"
         case .codex:      return "coco"
         }
     }

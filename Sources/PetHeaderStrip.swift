@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// 这块区域以前被 NSWindow 的隐形 titlebar 占着 (.titled styleMask + .fullSizeContentView)
 /// —— 视觉上一片空白，仅用作窗口拖动。现在让 SwiftUI 内容延伸到那里，承载：
-///   1. 当前 mode 对应的迷你桌宠 sprite (Clawd/云朵/Hermes/coco)
+///   1. 当前 mode 对应的迷你桌宠 sprite (Clawd/云朵/小马/coco)
 ///   2. 桌宠名 + 状态文本 (idle / 思考中 / 工具调用中 / 完成)
 ///   3. 右侧工具图标 + M/N 步进度
 ///   4. **Permission 决策面**（聊天窗开着时收到 HermesPetPermissionAsked → 展开成 90pt 卡片）
@@ -72,7 +72,7 @@ struct PetHeaderStrip: View {
         case .claudeCode: return "Clawd"
         case .directAPI:  return "云朵"
         case .openclaw:   return "fomo"   // PR-B 上线龙虾 sprite
-        case .hermes:     return "Hermes"
+        case .hermes:     return "小马"
         case .codex:      return "coco"
         }
     }
@@ -539,7 +539,8 @@ struct PetHeaderStrip: View {
             FomoView(pose: spritePose, height: Self.spriteHeight,
                      isWalking: spriteIsWorking, palette: palette, animated: anim)
         case .hermes:
-            HermesThinkingVideoSprite(height: Self.spriteHeight, isWorking: spriteIsWorking, animated: anim)
+            HorseView(pose: spritePose, height: Self.spriteHeight,
+                      isWalking: spriteIsWorking, palette: palette, animated: anim)
         case .codex:
             TerminalView(pose: spritePose, height: Self.spriteHeight,
                          isWalking: spriteIsWorking,
@@ -699,7 +700,8 @@ private struct ModeRailButton: View {
             FomoView(pose: .rest, height: Self.spriteHeight,
                      isWalking: isHovering, palette: palette, animated: anim)
         case .hermes:
-            HermesThinkingVideoSprite(height: Self.spriteHeight, isWorking: isHovering, animated: anim)
+            HorseView(pose: .rest, height: Self.spriteHeight,
+                      isWalking: isHovering, palette: palette, animated: anim)
         case .codex:
             TerminalView(pose: .rest, height: Self.spriteHeight,
                          isWalking: isHovering,

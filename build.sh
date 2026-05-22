@@ -19,6 +19,11 @@ if ! [ -d "$(xcode-select -p)/SharedFrameworks/XCBuild.framework" ] \
 fi
 
 echo "🏗️  Building $APP_NAME (universal: arm64 + x86_64)..."
+# SwiftPM/Xcode can leave stale resource bundles in .build after Package.swift
+# removes resources. Clear them before rebuilding so reverted assets do not
+# get copied into the final app bundle.
+rm -rf "$BUILD_DIR/apple/Products/Release"/*.bundle
+
 # 双架构 universal binary —— Intel Mac 也能跑（issue #6）
 # 多架构构建产物路径变为 .build/apple/Products/Release/
 swift build -c release --disable-sandbox --arch arm64 --arch x86_64

@@ -174,7 +174,7 @@ final class ClawdWalkController {
     /// 根据当前 AgentMode 选择宠物种类。
     /// - claudeCode → clawd（橙色螃蟹）
     /// - directAPI → cloud（indigo 云朵）
-    /// - hermes → horse（thinking-light 视频精灵）
+    /// - hermes → horse（金黄小马）
     /// - codex → terminal（mini Terminal.app 窗口）
     private func petVisual(for mode: AgentMode) -> PetVisualKind {
         switch mode {
@@ -1293,7 +1293,7 @@ final class ClawdWalkController {
         case .clawd:    persona = "Clawd 🦞"
         case .cloud:    persona = "云朵小精灵 ☁️"
         case .fox:      persona = "九尾狐 fomo 🦊"
-        case .horse:    persona = "Hermes 视频精灵"
+        case .horse:    persona = "金黄小马 🐴"
         case .terminal: persona = "终端小精灵 💻"
         }
         return """
@@ -1305,7 +1305,7 @@ final class ClawdWalkController {
     }
 
     /// 本地兜底文案 —— Hermes 没配 / 网络挂 / 限流时用。
-    /// 按当前桌宠形象给不同口吻：Clawd 用嗅嗅 / 螃蟹腔，Hermes 用轻快口吻，云朵用飘飘 / 看看
+    /// 按当前桌宠形象给不同口吻：Clawd 用嗅嗅 / 螃蟹腔，小马用哒哒 / 嗅嗅，云朵用飘飘 / 看看
     private func localFallbackQuote(for icon: DesktopIcon) -> String {
         let folderQuotes: [String]
         let fileQuotes: [String]
@@ -1723,7 +1723,7 @@ final class ClawdWalkState {
 /// 桌面漫步支持的像素宠物视觉。
 /// - clawd: 橙色螃蟹（Claude Code mode）
 /// - cloud: indigo 云朵（在线 AI / directAPI mode，自动戴眼镜切 vision）
-/// - horse: thinking-light 视频精灵（Hermes Gateway mode）
+/// - horse: 金黄小马（Hermes Gateway mode，飞马 Pegasus 形象）
 /// - terminal: 终端窗口（Codex mode，macOS 风格 Terminal.app + 小腿）
 enum PetVisualKind {
     case clawd
@@ -1874,7 +1874,9 @@ struct ClawdWalkView: View {
                     FomoView(pose: state.pose, height: clawdHeight, isWalking: state.isWalking,
                              palette: palette, animated: anim)
                 case .horse:
-                    HermesThinkingVideoSprite(height: clawdHeight, isWorking: state.isWalking, animated: anim)
+                    // 金黄小马 —— trot 步态 + 鬃毛尾巴飘动由 HorseView 内部自驱
+                    HorseView(pose: state.pose, height: clawdHeight, isWalking: state.isWalking,
+                              palette: palette, animated: anim)
                 case .terminal:
                     // 终端窗口 —— 光标闪烁 + 代码行抖动由 TerminalView 内部自驱
                     // isWorking 暂时跟 isWalking 联动（漫步态 = 在敲码氛围）

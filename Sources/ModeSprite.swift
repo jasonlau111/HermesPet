@@ -12,12 +12,11 @@ extension EnvironmentValues {
         set { self[SpriteFrameIntervalKey.self] = newValue }
     }
 }
-
 /// 灵动岛左耳的 mode 精灵 —— 显示当前 AgentMode 的标志元素，
 /// 并在"工作中"（流式生成时）播放各自专属的动画。
 ///
 /// Claude → 橘色 asterisk 自转（Claude 品牌色）
-/// Hermes → thinking-light 视频精灵
+/// Hermes → 绿色羽毛轻摆（信使羽毛）
 /// Codex  → 青色 `</>` 旁边加一个闪烁光标
 struct ModeSpriteView: View {
     let mode: AgentMode
@@ -768,9 +767,9 @@ struct ClaudeKnotSprite: View {
     }
 }
 
-// MARK: - Hermes：thinking-light 视频精灵
+// MARK: - Hermes：金黄像素小马 🐴（致敬希腊神话信使飞马 Pegasus）
 
-/// Hermes mode 的左耳精灵 —— 复用 hermes-web-ui 的 thinking-light.mp4。
+/// Hermes mode 的左耳精灵 —— 金黄像素小马
 ///
 /// 三套互斥动画 + 优先级 working > celebrate > idle look：
 /// - **idle look**：rest 状态周期性扫视 + 偶尔抬头嘶鸣（armsUp）
@@ -799,7 +798,7 @@ struct HermesHorseSprite: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            HermesThinkingVideoSprite(height: horseHeight, isWorking: isWorking, animated: animated)
+            HorseView(pose: pose, height: horseHeight, isWalking: false, palette: palette, animated: animated)
             if isWorking {
                 ToolOverlay(kind: currentTool)
                     .offset(x: 3, y: -2)
@@ -2045,4 +2044,3 @@ struct CloudPetView: View {
         ctx.fill(Path(CGRect(x: x * unit, y: y * unit, width: w * unit, height: h * unit)), with: fill)
     }
 }
-
