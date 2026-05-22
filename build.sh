@@ -50,6 +50,11 @@ if [ -f "$SCRIPT_DIR/AppIcon.icns" ]; then
     echo "🎨 已复制 AppIcon.icns"
 fi
 
+if [ -f "$SCRIPT_DIR/Sources/Resources/StatusBarLogoTemplate.png" ]; then
+    cp "$SCRIPT_DIR/Sources/Resources/StatusBarLogoTemplate.png" "$APP_BUNDLE/Contents/Resources/StatusBarLogoTemplate.png"
+    echo "🎨 已复制状态栏模板图标"
+fi
+
 # Copy SwiftPM resource bundles, e.g. video assets declared in Package.swift.
 for RESOURCE_BUNDLE in "$BUILD_DIR/apple/Products/Release"/*.bundle; do
     if [ -d "$RESOURCE_BUNDLE" ]; then
