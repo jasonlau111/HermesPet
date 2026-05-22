@@ -5,6 +5,8 @@ struct ChatView: View {
 
     @State private var showClearConfirm = false
     @State private var isDropTargeted = false
+    /// 聊天历史默认只渲染最近一段，避免长对话把所有 Markdown view 都挂进 SwiftUI 树。
+    @State private var visibleMessageLimit = 10
     /// 聊天区是否贴近底部。用户手动上滑看历史时置 false，
     /// 流式输出就不再强行 scrollTo bottom 抢滚动。
     @State private var isMessagesNearBottom = true
@@ -16,6 +18,8 @@ struct ChatView: View {
 
     private static let messagesScrollSpace = "HermesPetMessagesScroll"
     private static let messagesBottomAnchorID = "HermesPetMessagesBottomAnchor"
+    private static let initialVisibleMessageLimit = 10
+    private static let visibleMessagePageSize = 20
 
     /// 新建画布的 Sheet 控制（点 + 菜单"新建画布"时打开）
     @State private var showCanvasCreator = false
@@ -298,6 +302,16 @@ struct ChatView: View {
         !viewModel.isLoading
     }
 
+    private var visibleMessages: [ChatMessage] {
+        let messages = viewModel.messages
+        guard messages.count > visibleMessageLimit else { return messages }
+        return Array(messages.suffix(visibleMessageLimit))
+    }
+
+    private var hiddenMessageCount: Int {
+        max(0, viewModel.messages.count - visibleMessageLimit)
+    }
+
     /// 新用户引导卡显示条件：在线 AI 模式 + 没填 API Key（dmg 分发场景对方默认就在这个 mode）。
     /// 让对方第一次打开就知道"要去设置里选服务商 + 配置 Key 才能聊天"
     private var showOnboardingCard: Bool {
@@ -335,6 +349,36 @@ struct ChatView: View {
             GeometryReader { viewport in
                 ScrollView {
                     LazyVStack(spacing: 10) {
+                        if hiddenMessageCount > 0 {
+                            Button {
+                                let firstVisibleID = visibleMessages.first?.id
+                                visibleMessageLimit = min(
+                                    viewModel.messages.count,
+                                    visibleMessageLimit + Self.visibleMessagePageSize
+                                )
+                                if let firstVisibleID {
+                                    DispatchQueue.main.async {
+                                        proxy.scrollTo(firstVisibleID, anchor: .top)
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "clock.arrow.circlepath")
+                                    Text("加载更早消息（\(hiddenMessageCount)）")
+                                }
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(.primary.opacity(0.06))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 2)
+                        }
+
                         // 新对话欢迎页：精致的 WelcomeView 替代纯文字欢迎语
                         if showSuggestions {
                             WelcomeView(mode: viewModel.agentMode, tint: headerTint)
@@ -355,7 +399,7 @@ struct ChatView: View {
                             }
                         }
 
-                        ForEach(viewModel.messages) { message in
+                        ForEach(visibleMessages) { message in
                             // 新对话状态下，"原始欢迎消息"由 WelcomeView 代替，不再显示这条 assistant 占位
                             if !(showSuggestions && message.role == .assistant) {
                                 MessageBubbleView(
@@ -427,6 +471,7 @@ struct ChatView: View {
                 }
                 .onChange(of: viewModel.activeConversationID) { _, _ in
                     isMessagesNearBottom = true
+                    visibleMessageLimit = Self.initialVisibleMessageLimit
                     scrollToBottom(proxy, animated: false)
                 }
                 .onChange(of: viewModel.messages.count) { _, _ in

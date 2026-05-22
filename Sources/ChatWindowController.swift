@@ -12,8 +12,7 @@ extension Notification.Name {
 let kChatWindowAlwaysOnTopKey = "chatWindowAlwaysOnTop"
 
 /// 聊天窗口控制器：用 NSWindow 替代 NSPopover，
-/// 显示/隐藏时从灵动岛位置「展开/收回」动画，
-/// 但保留 NSWindow 可拖拽调整大小的能力。
+/// 保留 NSWindow 可拖拽调整大小的能力。
 @MainActor
 final class ChatWindowController: NSObject, NSWindowDelegate {
     /// 全局单例引用 —— PetHeaderStrip / PermissionWindowController 等需要查 isVisible 来分发
@@ -92,12 +91,12 @@ final class ChatWindowController: NSObject, NSWindowDelegate {
         self.lastAnchor = anchor
 
         let target = savedFrame ?? defaultFrame(near: anchor)
-        let start = collapsedFrame(near: anchor)
 
         isAnimating = true
-        // 动画期间放开 contentMinSize，让 frame 能缩到很小
-        window.contentMinSize = .zero
-        window.setFrame(start, display: false)
+        // macOS 26 上 NSHostingView 会在窗口尺寸动画期间反向触发 updateAnimatedWindowSize，
+        // 进而撞进 NSWindow display cycle 的 constraints 更新异常。聊天窗只做透明度动画，
+        // frame 一次性切到目标尺寸，稳定性优先于展开形变。
+        window.setFrame(target, display: false)
         window.alphaValue = 0
         window.orderFront(nil)
         // ⚠️ 立刻 makeKey + 把焦点设到输入框 —— 不能等动画结束才做。
@@ -113,16 +112,13 @@ final class ChatWindowController: NSObject, NSWindowDelegate {
         NotificationCenter.default.post(name: .hermesPetChatWindowShown, object: nil)
 
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.34
-            // CA 没有 spring，用 easeOut + 略长 duration 模拟弹性入场
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1.0)
+            ctx.duration = 0.16
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             ctx.allowsImplicitAnimation = true
-            window.animator().setFrame(target, display: true)
             window.animator().alphaValue = 1
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
                 guard let self = self else { return }
-                // 动画结束 —— 恢复 contentMinSize，让用户后续不能拖太小
                 self.window.contentMinSize = NSSize(width: 360, height: 360)
                 self.isAnimating = false
                 // 兜底再设一次焦点：极端情况下 NSHostingView 在动画期间才完成 mount，
@@ -168,22 +164,16 @@ final class ChatWindowController: NSObject, NSWindowDelegate {
         // 退出前先把当前 frame 保存（万一用户没动也保存一次默认值）
         if !isAnimating { saveFrame() }
 
-        let end = collapsedFrame(near: lastAnchor)
-        let originalFrame = window.frame  // 隐藏前的真实 frame，结束后恢复
-
         isAnimating = true
-        window.contentMinSize = .zero  // 让窗口能缩到锚点尺寸
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.22
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.55, 0.0, 0.85, 0.4)
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             ctx.allowsImplicitAnimation = true
-            window.animator().setFrame(end, display: true)
             window.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
                 guard let self = self else { return }
                 self.window.orderOut(nil)
-                self.window.setFrame(originalFrame, display: false)
                 self.window.alphaValue = 1
                 self.window.contentMinSize = NSSize(width: 360, height: 360)
                 self.isAnimating = false

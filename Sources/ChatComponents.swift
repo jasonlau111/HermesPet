@@ -6,6 +6,8 @@ import PDFKit
 
 /// 消息正文基础字号（13pt）—— scale 应用到此基数上。Header / 代码块等用各自基数也走同一 scale
 private let kMessageBaseFontSize: CGFloat = 13
+/// 聊天气泡头像尺寸。原来是 28pt，按用户要求放大一倍。
+private let kMessageAvatarSize: CGFloat = 56
 
 struct MessageBubbleView: View {
     let message: ChatMessage
@@ -27,6 +29,7 @@ struct MessageBubbleView: View {
     @State private var didPin = false
     @State private var pinShake = false
     @State private var profileStore = ProfileSettingsStore.shared
+    @State private var tts = TTSPlaybackController.shared
 
     /// 字号缩放（由 ChatView 经 Environment 注入）—— 应用到正文 Text / Markdown / 代码块
     @Environment(\.chatFontScale) private var fontScale: Double
@@ -35,6 +38,9 @@ struct MessageBubbleView: View {
     /// assistant 内容以 "❌" 开头 → 出错消息，可重试
     private var isError: Bool {
         !isUser && message.content.hasPrefix("❌")
+    }
+    private var canPlaySpeech: Bool {
+        tts.canPlay(content: message.content, isUser: isUser, isStreaming: message.isStreaming)
     }
     /// 时间戳格式：今天显示 HH:mm，昨天显示 "昨天 HH:mm"，更早显示 "M月D日 HH:mm"
     private var timeString: String {
@@ -124,15 +130,15 @@ struct MessageBubbleView: View {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 28, height: 28)
+                    .frame(width: kMessageAvatarSize, height: kMessageAvatarSize)
                     .clipShape(Circle())
                     .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 0.5))
             } else {
                 Circle()
                     .fill(isUser ? Color.blue.opacity(0.2) : assistantTint.opacity(0.2))
-                    .frame(width: 28, height: 28)
+                    .frame(width: kMessageAvatarSize, height: kMessageAvatarSize)
                 Image(systemName: isUser ? "person.fill" : assistantIcon)
-                    .font(.caption)
+                    .font(.system(size: 23, weight: .semibold))
                     .foregroundStyle(isUser ? .blue : assistantTint)
             }
         }
@@ -212,7 +218,6 @@ struct MessageBubbleView: View {
             if !isPlaceholderText(message.content) {
                 Text(message.content)
                     .font(.system(size: kMessageBaseFontSize * fontScale))
-                    .textSelection(.enabled)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(
@@ -244,11 +249,7 @@ struct MessageBubbleView: View {
                     ThinkingDots(color: assistantTint.opacity(0.7))
                 } else {
                     HStack(alignment: .lastTextBaseline, spacing: 4) {
-                        MarkdownTextView(
-                            content: message.content,
-                            onChoiceSelected: nil,             // 流式期间不响应选项点击
-                            tint: assistantTint
-                        )
+                        StreamingPlainTextView(content: message.content)
                         .font(.system(size: kMessageBaseFontSize * fontScale))
                         TypingCursor(color: assistantTint)
                     }
@@ -297,6 +298,23 @@ struct MessageBubbleView: View {
                 .buttonStyle(.plain)
                 .help(didCopy ? "已复制" : "复制内容")
 
+                // 朗读按钮（仅 assistant 消息）。MiMo TTS 配好 API Key 后可用。
+                if !isUser {
+                    Button {
+                        tts.toggle(messageID: message.id, content: message.content)
+                    } label: {
+                        Image(systemName: speechButtonIcon)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(speechButtonColor)
+                            .frame(width: 20, height: 20)
+                            .background(Circle().fill(.ultraThinMaterial))
+                            .overlay(Circle().stroke(.primary.opacity(0.08), lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canPlaySpeech)
+                    .help(canPlaySpeech ? speechButtonHelp : "在「音效」里填写 MiMo TTS API Key 后可朗读")
+                }
+
                 // Pin 到桌面（仅 assistant 消息显示，用户自己说的话没必要 pin）
                 if !isUser {
                     Button(action: pinContent) {
@@ -320,6 +338,25 @@ struct MessageBubbleView: View {
         }
     }
 
+    private var speechButtonIcon: String {
+        guard tts.currentMessageID == message.id else { return "speaker.wave.2.fill" }
+        if tts.isLoading { return "waveform" }
+        return tts.isPaused ? "play.fill" : "pause.fill"
+    }
+
+    private var speechButtonColor: Color {
+        guard canPlaySpeech else { return .secondary.opacity(0.45) }
+        guard tts.currentMessageID == message.id else { return .secondary }
+        if tts.isLoading { return assistantTint }
+        return tts.isPaused ? .secondary : assistantTint
+    }
+
+    private var speechButtonHelp: String {
+        guard tts.currentMessageID == message.id else { return "朗读这条回复" }
+        if tts.isLoading { return "正在生成语音，点击取消" }
+        return tts.isPaused ? "继续朗读" : "暂停朗读"
+    }
+
     /// 把这条 assistant 消息 pin 到桌面右上角。已达 8 张上限时 didPin 短暂变红提示
     private func pinContent() {
         let result = PinCardController.pin(content: message.content, mode: agentMode, conversationID: conversationID, messageID: message.id)
@@ -340,6 +377,17 @@ struct MessageBubbleView: View {
         case .full:
             didPin = false
         }
+    }
+}
+
+/// 流式输出期间只用普通 Text：避免每个增量都触发 Markdown block parse、
+/// inline AttributedString 构造和 Choice/Table/Task 视图重建。完成后再走完整 MarkdownTextView。
+struct StreamingPlainTextView: View {
+    let content: String
+
+    var body: some View {
+        Text(content)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

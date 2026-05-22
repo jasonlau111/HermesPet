@@ -314,13 +314,17 @@ final class OpenCodeServerManager: @unchecked Sendable {
             throw OpenCodeServerError.healthCheckFailed
         }
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard json?["healthy"] as? Bool == true else {
+        let rustHealthy = HermesRustCore.shared.parseOpenCodeHealth(data)
+        guard rustHealthy == true || json?["healthy"] as? Bool == true else {
             throw OpenCodeServerError.healthCheckFailed
         }
     }
 
     /// "opencode server listening on http://127.0.0.1:14098" → 14098
     private static func parsePort(from line: String) -> Int? {
+        if let port = HermesRustCore.shared.parseOpenCodePort(from: line) {
+            return port
+        }
         let pattern = #"listening on http://127\.0\.0\.1:(\d+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let ns = line as NSString

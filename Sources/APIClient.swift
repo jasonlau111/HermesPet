@@ -122,6 +122,7 @@ final class APIClient: @unchecked Sendable {
       eta: 30m            # 可选预估时长
     ```
     客户端会渲染成可点击任务卡片，每张有 📌 Pin / 🤖 让 AI 做 / ✗ 跳过 按钮。**只在确实是任务规划场景用此格式**。
+    \(MessageTimeAwareness.systemInstruction)
     """
     }
 
@@ -191,8 +192,8 @@ final class APIClient: @unchecked Sendable {
 
                     // 前置一条 system message 注入客户端约定（选项列表 / 任务规划 fence）
                     var apiMessages: [APIMessage] = [APIMessage(role: "system", text: self.systemPrompt)]
-                    apiMessages.append(contentsOf: messages.map {
-                        APIMessage(role: $0.role.rawValue, text: $0.content, images: $0.images)
+                    apiMessages.append(contentsOf: MessageTimeAwareness.render(messages: messages).map {
+                        APIMessage(role: $0.message.role.rawValue, text: $0.content, images: $0.message.images)
                     })
                     let body = ChatCompletionRequest(model: self.modelName, messages: apiMessages, stream: true)
                     request.httpBody = try JSONEncoder().encode(body)
@@ -273,8 +274,8 @@ final class APIClient: @unchecked Sendable {
         request.timeoutInterval = 120
 
         var apiMessages: [APIMessage] = [APIMessage(role: "system", text: systemPrompt)]
-        apiMessages.append(contentsOf: messages.map {
-            APIMessage(role: $0.role.rawValue, text: $0.content, images: $0.images)
+        apiMessages.append(contentsOf: MessageTimeAwareness.render(messages: messages).map {
+            APIMessage(role: $0.message.role.rawValue, text: $0.content, images: $0.message.images)
         })
         let body = ChatCompletionRequest(model: modelName, messages: apiMessages, stream: false)
         request.httpBody = try JSONEncoder().encode(body)

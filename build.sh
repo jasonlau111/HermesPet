@@ -70,6 +70,24 @@ echo "📦 嵌入 opencode $OPENCODE_VERSION ($OPENCODE_SIZE)"
 cp "$OPENCODE_BINARY" "$APP_BUNDLE/Contents/Resources/opencode"
 chmod +x "$APP_BUNDLE/Contents/Resources/opencode"
 
+# === Optional Rust chat core ===
+# Rust 负责高频 JSON/SSE 事件解析和大消息索引的核心计算；Swift 侧保留 fallback，
+# 所以没有 Cargo 时仍可构建，只是少了这条加速路径。
+RUST_CORE_MANIFEST="$SCRIPT_DIR/rust/hermes-chat-core/Cargo.toml"
+RUST_CORE_DYLIB="$SCRIPT_DIR/rust/hermes-chat-core/target/release/libhermes_chat_core.dylib"
+if [ -f "$RUST_CORE_MANIFEST" ]; then
+    if command -v cargo >/dev/null 2>&1; then
+        echo "🦀 构建 Rust chat core..."
+        cargo build --manifest-path "$RUST_CORE_MANIFEST" --release
+        if [ -f "$RUST_CORE_DYLIB" ]; then
+            cp "$RUST_CORE_DYLIB" "$APP_BUNDLE/Contents/Resources/libhermes_chat_core.dylib"
+            chmod 755 "$APP_BUNDLE/Contents/Resources/libhermes_chat_core.dylib"
+        fi
+    else
+        echo "⚠️  未找到 cargo，跳过 Rust chat core（Swift fallback 仍可用）"
+    fi
+fi
+
 # Create PkgInfo
 echo "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 

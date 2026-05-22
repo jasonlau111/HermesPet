@@ -1,6 +1,8 @@
 import Foundation
 import Network
 
+private let kPermissionHookPreferredPort: UInt16 = 53805
+
 /// HermesPet 内嵌的本地 HTTP server，专门给 Claude Code / Codex CLI 的 permission hook 用。
 ///
 /// **架构**：
@@ -33,7 +35,7 @@ final class PermissionHookServer {
         params.allowLocalEndpointReuse = true
         params.acceptLocalOnly = true   // 只接受 localhost 连接
 
-        let l = try NWListener(using: params)
+        let l = try Self.makeListener(params: params)
         self.listener = l
 
         l.newConnectionHandler = { [weak self] conn in
@@ -73,6 +75,30 @@ final class PermissionHookServer {
                 Self.shared.dispatchDecision(requestID: requestID, decision: decision)
             }
         }
+    }
+
+    /// 端口策略：
+    /// 1. 优先复用上次成功监听的端口（UserDefaults `permissionHookPort`）
+    /// 2. 没有历史值时，用 HermesPet 约定的固定本地端口
+    /// 3. 如果都占用，再回退到系统分配的任意可用端口
+    private nonisolated static func makeListener(params: NWParameters) throws -> NWListener {
+        var candidates: [UInt16] = []
+        let savedPort = UInt16(UserDefaults.standard.integer(forKey: "permissionHookPort"))
+        if savedPort > 0 { candidates.append(savedPort) }
+        if !candidates.contains(kPermissionHookPreferredPort) {
+            candidates.append(kPermissionHookPreferredPort)
+        }
+
+        for candidate in candidates {
+            guard let endpointPort = NWEndpoint.Port(rawValue: candidate) else { continue }
+            if let listener = try? NWListener(using: params, on: endpointPort) {
+                NSLog("[PermissionHookServer] binding preferred port %d", Int(candidate))
+                return listener
+            }
+        }
+
+        NSLog("[PermissionHookServer] preferred ports unavailable, falling back to random port")
+        return try NWListener(using: params)
     }
 
     func stop() {
@@ -137,7 +163,8 @@ final class PermissionHookServer {
         }
 
         let source = HookSource.detect(payload: payload)
-        let request = Self.buildPermissionRequest(payload: payload, source: source)
+        let normalized = HermesRustCore.shared.normalizePermissionPayload(bodyData)
+        let request = Self.buildPermissionRequest(payload: payload, normalized: normalized, source: source)
 
         // 广播给 PermissionWindow 显示卡片，挂起 HTTP 响应直到用户决策
         let reqID = request.id
@@ -156,10 +183,16 @@ final class PermissionHookServer {
 
     /// 把 hook payload 转成 PermissionRequest 数据结构（复用现有 UI）
     /// Claude / Codex payload 字段名不同但语义对齐：tool_name + tool_input
-    private static func buildPermissionRequest(payload: [String: Any], source: HookSource) -> PermissionRequest {
-        let toolName = (payload["tool_name"] as? String) ?? "Unknown"
-        let toolInput = (payload["tool_input"] as? [String: Any]) ?? [:]
-        let sessionID = (payload["session_id"] as? String) ?? "ses_\(UUID().uuidString)"
+    private static func buildPermissionRequest(payload: [String: Any], normalized: [String: Any]?, source: HookSource) -> PermissionRequest {
+        let toolName = (normalized?["toolName"] as? String)
+            ?? (payload["tool_name"] as? String)
+            ?? "Unknown"
+        let toolInput = (normalized?["toolInput"] as? [String: Any])
+            ?? (payload["tool_input"] as? [String: Any])
+            ?? [:]
+        let sessionID = (normalized?["sessionID"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? (payload["session_id"] as? String)
+            ?? "ses_\(UUID().uuidString)"
         let id = "per_\(UUID().uuidString)"
 
         var metadata: [String: AnyCodable] = ["tool": .string(toolName)]

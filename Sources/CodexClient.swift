@@ -133,21 +133,26 @@ final class CodexClient: @unchecked Sendable {
 
 客户端会渲染成可点击任务卡片，每张有 📌 Pin / 🤖 让 AI 做 / ✗ 跳过 按钮。**只在确实是任务规划场景才用，普通对话仍自然语言回复**。
 
+\(MessageTimeAwareness.systemInstruction)
+
 """
 
     private func buildPrompt(messages: [ChatMessage], isResume: Bool) -> String {
         let convo = messages.filter { $0.role == .user || $0.role == .assistant }
-        guard let latest = convo.last, latest.role == .user else {
-            return convo.map { "\($0.role == .user ? "用户" : "助手"): \($0.content)" }.joined(separator: "\n\n") + Self.clientHints
+        let renderedConvo = MessageTimeAwareness.render(messages: convo)
+        guard let latestRendered = renderedConvo.last, latestRendered.message.role == .user else {
+            return renderedConvo.map { "\($0.message.role == .user ? "用户" : "助手"): \($0.content)" }.joined(separator: "\n\n") + Self.clientHints
         }
+        let latest = latestRendered.message
+        let latestContent = latestRendered.content
         let docPaths = latest.documentPaths
         if isResume {
-            return buildLatestTurnPrompt(latest: latest, docPaths: docPaths)
+            return buildLatestTurnPrompt(latestContent: latestContent, docPaths: docPaths)
         }
-        let history = convo.dropLast()
+        let history = renderedConvo.dropLast()
         if history.isEmpty {
-            if docPaths.isEmpty { return latest.content + Self.clientHints }
-            var p = latest.content
+            if docPaths.isEmpty { return latestContent + Self.clientHints }
+            var p = latestContent
             p += "\n\n附带的文档（请用 shell 工具按这些绝对路径读取）：\n"
             for path in docPaths { p += path + "\n" }
             return p + Self.clientHints
@@ -156,15 +161,15 @@ final class CodexClient: @unchecked Sendable {
         lines.append("以下是我们之前的对话历史。请基于上下文回答最后的新问题，不要重复或总结历史。")
         lines.append("")
         lines.append("--- 历史开始 ---")
-        for msg in history {
-            let who = msg.role == .user ? "用户" : "助手"
-            lines.append("【\(who)】\(msg.content)")
+        for item in history {
+            let who = item.message.role == .user ? "用户" : "助手"
+            lines.append("【\(who)】\(item.content)")
             lines.append("")
         }
         lines.append("--- 历史结束 ---")
         lines.append("")
         lines.append("现在用户问：")
-        lines.append(latest.content)
+        lines.append(latestContent)
         if !docPaths.isEmpty {
             lines.append("")
             lines.append("用户附带了以下文档，请用 shell 工具按这些绝对路径读取：")
@@ -174,11 +179,11 @@ final class CodexClient: @unchecked Sendable {
     }
 
     /// resume 模式下 Codex 已经有前文，只发最新一轮用户输入，避免每条消息都像新会话一样重跑。
-    private func buildLatestTurnPrompt(latest: ChatMessage, docPaths: [String]) -> String {
+    private func buildLatestTurnPrompt(latestContent: String, docPaths: [String]) -> String {
         guard !docPaths.isEmpty else {
-            return latest.content + Self.clientHints
+            return latestContent + Self.clientHints
         }
-        var p = latest.content
+        var p = latestContent
         p += "\n\n用户附带了以下文档，请用 shell 工具按这些绝对路径读取：\n"
         for path in docPaths { p += path + "\n" }
         return p + Self.clientHints

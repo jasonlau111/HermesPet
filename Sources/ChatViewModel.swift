@@ -1032,12 +1032,10 @@ final class ChatViewModel {
 
                 var fullContent = ""
                 var lastUpdate = Date.distantPast
-                // 流式刷新节流：32ms 一次（约 30fps）。
-                // 之前 80ms 是 12fps，刷新跳变肉眼可见"卡一下"；改 32ms 后接近行级连续流动，
-                // 跟 macOS 系统动效一致（60fps 是上限，30fps 是流畅基线）。
-                // MarkdownTextView 的 parseBlocks 在中等长度回复（<5K 字符）下 CPU 可忽略，
-                // 真正昂贵的是 InlineMarkdownView 内 AttributedString 重建，已被 SwiftUI 自动 diff
-                let throttle: TimeInterval = 0.032
+                // 流式刷新节流：80ms 一次（约 12.5fps）。
+                // 聊天页流式期间走轻量 Text，结束后才做完整 Markdown 渲染；这里优先减少
+                // @Observable 消息数组写入次数，避免每个 token 都让整条消息重新 diff/layout。
+                let throttle: TimeInterval = 0.080
 
                 for try await delta in stream {
                     try Task.checkCancellation()
@@ -1068,6 +1066,12 @@ final class ChatViewModel {
                     }
                 }
                 didSucceed = !visibleContent.isEmpty || !generatedImages.isEmpty
+                if didSucceed, !visibleContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    TTSPlaybackController.shared.autoPlayIfEnabled(
+                        messageID: assistantMessageID,
+                        content: visibleContent
+                    )
+                }
 
                 // 灵动岛下方选项菜单 ChoiceMenuOverlay 已废弃 —— 跟聊天窗内 ChoiceCard 信息重复，
                 // 用户决定只保留聊天窗里的 ChoiceCard。不再 post HermesPetChoiceListReady。

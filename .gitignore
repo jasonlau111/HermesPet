@@ -18,6 +18,12 @@ dist/
 # opencode 二进制下载缓存（build.sh 首次构建时自动 curl 下载，~33MB zip + ~102MB 解压）
 .opencode-cache/
 
+# Rust chat core build output
+rust/**/target/
+
+# Local CodeGraph indexes
+.codegraph/
+
 # 备份与中间快照（保留本地，不提交）
 *.bak
 *.original

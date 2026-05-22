@@ -157,7 +157,7 @@ final class OpenCodeHTTPClient: @unchecked Sendable {
 
         // 6. POST prompt（这是同步 endpoint，等到 message 完整生成才返回）
         // parts/body 序列化成 Data 跨 Sendable 边界（Swift 6: [[String:Any]] 不是 Sendable）
-        let parts = buildParts(userMsg: userMsg)
+        let parts = buildParts(userMsg: userMsg, text: MessageTimeAwareness.latestUserContent(in: messages) ?? prompt)
         // 如果消息带图片，且当前 model 是文本模型 → 仅这次 prompt override 到该 provider 的 vision model。
         // session 仍绑用户原 model（不改 lastModelByConversation）—— 下次纯文本消息又用回原 model
         let hasImage = (userMsg?.images.isEmpty == false) || (userMsg?.imagePaths.isEmpty == false)
@@ -414,6 +414,17 @@ final class OpenCodeHTTPClient: @unchecked Sendable {
                 if Task.isCancelled { return }
                 guard line.hasPrefix("data: ") else { continue }
                 let jsonStr = String(line.dropFirst(6))
+                if let parsed = HermesRustCore.shared.parseOpenCodeSSEEvent(
+                    json: jsonStr,
+                    targetSessionID: sessionID
+                ),
+                   handleRustParsedSSEEvent(
+                    parsed,
+                    streamState: streamState,
+                    continuation: continuation
+                   ) {
+                    continue
+                }
                 guard let jsonData = jsonStr.data(using: .utf8),
                       let event = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
                     continue
@@ -427,6 +438,84 @@ final class OpenCodeHTTPClient: @unchecked Sendable {
             }
         } catch {
             // SSE 断了 —— 不报错给用户，POST 那边正常拿到完整 message 即可
+        }
+    }
+
+    @discardableResult
+    private func handleRustParsedSSEEvent(
+        _ event: [String: Any],
+        streamState: StreamState,
+        continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) -> Bool {
+        guard let kind = event["kind"] as? String else { return false }
+
+        switch kind {
+        case "ignore":
+            return true
+
+        case "text_delta":
+            if let text = event["text"] as? String, !text.isEmpty {
+                streamState.markTextYielded()
+                continuation.yield(text)
+            }
+            return true
+
+        case "part_updated_text":
+            if !streamState.hasYieldedText,
+               let text = event["text"] as? String,
+               !text.isEmpty {
+                streamState.markTextYielded()
+                continuation.yield(text)
+            }
+            return true
+
+        case "permission_asked":
+            if let payload = event["payload"] as? [String: Any] {
+                handlePermissionAsked(payload)
+            }
+            return true
+
+        case "permission_replied", "question_dismissed":
+            if let requestID = event["requestID"] as? String, !requestID.isEmpty {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: .init("HermesPetPermissionReplied"),
+                        object: nil,
+                        userInfo: ["requestID": requestID]
+                    )
+                }
+            }
+            return true
+
+        case "question_asked":
+            if let payload = event["payload"] as? [String: Any] {
+                handleQuestionAsked(payload)
+            }
+            return true
+
+        case "tool_started":
+            let name = event["name"] as? String ?? ""
+            let arg = event["arg"] as? String ?? ""
+            let filePath = event["file_path"] as? String ?? ""
+            var info: [String: Any] = ["name": name, "arg": arg]
+            if !filePath.isEmpty { info["file_path"] = filePath }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .init("HermesPetToolStarted"), object: nil, userInfo: info)
+            }
+            return true
+
+        case "tool_ended":
+            let name = event["name"] as? String ?? ""
+            let filePath = event["file_path"] as? String ?? ""
+            var info: [String: Any] = ["name": name]
+            if !filePath.isEmpty { info["file_path"] = filePath }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .init("HermesPetToolEnded"), object: nil, userInfo: info)
+            }
+            return true
+
+        default:
+            return false
         }
     }
 
@@ -638,9 +727,8 @@ final class OpenCodeHTTPClient: @unchecked Sendable {
     /// 把 user message 的 text + 图片/文档拼成 opencode parts 数组：
     /// - text: `{type:"text",text:"..."}`
     /// - 文件: `{type:"file",mime:"...",filename:"...",url:"file:///..."}`
-    private func buildParts(userMsg: ChatMessage?) -> [[String: Any]] {
+    private func buildParts(userMsg: ChatMessage?, text: String) -> [[String: Any]] {
         var parts: [[String: Any]] = []
-        let text = userMsg?.content ?? ""
         if !text.isEmpty {
             parts.append(["type": "text", "text": text])
         }

@@ -24,7 +24,9 @@ struct MarkdownTextView: View {
     @Environment(\.chatFontScale) private var fontScale: Double
 
     var body: some View {
-        let blocks = parseBlocks(content)
+        let blocks = Self.cachedBlocks(for: content) {
+            parseBlocks(content)
+        }
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
@@ -103,6 +105,35 @@ struct MarkdownTextView: View {
         case table(headers: [String], alignments: [TableColumnAlignment], rows: [[String]])
         /// AI 输出 ```tasks fence 时识别为任务清单，渲染成可操作卡片
         case taskList(items: [PlannedTask])
+    }
+
+    private static let blockCacheLock = NSLock()
+    private static var blockCache: [String: [Block]] = [:]
+    private static var blockCacheOrder: [String] = []
+    private static let blockCacheLimit = 128
+
+    private static func cachedBlocks(for text: String, parse: () -> [Block]) -> [Block] {
+        blockCacheLock.lock()
+        if let cached = blockCache[text] {
+            blockCacheLock.unlock()
+            return cached
+        }
+        blockCacheLock.unlock()
+
+        let parsed = parse()
+
+        blockCacheLock.lock()
+        if blockCache[text] == nil {
+            blockCache[text] = parsed
+            blockCacheOrder.append(text)
+            while blockCacheOrder.count > blockCacheLimit {
+                let old = blockCacheOrder.removeFirst()
+                blockCache.removeValue(forKey: old)
+            }
+        }
+        blockCacheLock.unlock()
+
+        return parsed
     }
 
     /// 表格列对齐 —— 由 separator 行的 :--- / ---: / :---: 决定
@@ -487,18 +518,56 @@ struct InlineMarkdownView: View {
     var body: some View {
         if text.trimmingCharacters(in: .whitespaces).isEmpty {
             EmptyView()
-        } else if let attributed = try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnly)
-        ) {
+        } else if let attributed = Self.cachedAttributedString(for: text) {
             Text(attributed)
-                .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             Text(text)
-                .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private static let attributedCacheLock = NSLock()
+    private static var attributedCache: [String: AttributedString] = [:]
+    private static var failedMarkdownKeys = Set<String>()
+    private static var attributedCacheOrder: [String] = []
+    private static let attributedCacheLimit = 512
+
+    private static func cachedAttributedString(for text: String) -> AttributedString? {
+        attributedCacheLock.lock()
+        if let cached = attributedCache[text] {
+            attributedCacheLock.unlock()
+            return cached
+        }
+        if failedMarkdownKeys.contains(text) {
+            attributedCacheLock.unlock()
+            return nil
+        }
+        attributedCacheLock.unlock()
+
+        guard let parsed = try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnly)
+        ) else {
+            attributedCacheLock.lock()
+            failedMarkdownKeys.insert(text)
+            attributedCacheLock.unlock()
+            return nil
+        }
+
+        attributedCacheLock.lock()
+        if attributedCache[text] == nil {
+            attributedCache[text] = parsed
+            attributedCacheOrder.append(text)
+            while attributedCacheOrder.count > attributedCacheLimit {
+                let old = attributedCacheOrder.removeFirst()
+                attributedCache.removeValue(forKey: old)
+                failedMarkdownKeys.remove(old)
+            }
+        }
+        attributedCacheLock.unlock()
+
+        return parsed
     }
 }
 
@@ -540,7 +609,6 @@ struct CodeBlockView: View {
                     .font(.system(size: 12 * fontScale, design: .monospaced))
                     .foregroundStyle(.primary)
                     .padding(10)
-                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }

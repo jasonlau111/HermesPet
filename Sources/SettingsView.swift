@@ -14,11 +14,20 @@ struct SettingsView: View {
     @State private var showKey = false
     @State private var testing = false
     @State private var testResult: (success: Bool, message: String)?
+    @State private var showTTSKey = false
     @State private var hotkeyRefreshID = UUID()
+    @State private var gatewayStatusTimer: Timer?
     /// 画布模式开关（实验性功能）—— ChatView 的 + 菜单根据这个 flag 决定是否显示"新建画布"
     @AppStorage("canvasModeEnabled") private var canvasModeEnabled: Bool = false
     @AppStorage(ChatFontScale.storageKey) private var chatFontScale: Double = ChatFontScale.default
     @AppStorage(DisplayMode.storageKey) private var displayModeRaw: String = DisplayMode.auto.rawValue
+    @AppStorage(TTSPlaybackSettings.autoPlayKey) private var ttsAutoPlayEnabled: Bool = false
+    @AppStorage(TTSPlaybackSettings.mimoApiKeyKey) private var ttsMimoApiKey: String = ""
+    @AppStorage(TTSPlaybackSettings.mimoBaseURLKey) private var ttsMimoBaseURL: String = TTSPlaybackSettings.defaultBaseURL
+    @AppStorage(TTSPlaybackSettings.mimoModelKey) private var ttsMimoModel: String = TTSPlaybackSettings.defaultModel
+    @AppStorage(TTSPlaybackSettings.mimoVoiceKey) private var ttsMimoVoice: String = TTSPlaybackSettings.defaultVoice
+    @AppStorage(TTSPlaybackSettings.mimoVoiceDesignDescKey) private var ttsMimoVoiceDesignDesc: String = ""
+    @AppStorage(TTSPlaybackSettings.mimoStylePromptKey) private var ttsMimoStylePrompt: String = ""
     @State private var pendingRestartFromDisplayMode = false
     /// 桌宠桌面漫步大小档位（5 档：迷你 / 小 / 默认 / 大 / 特大）
     @AppStorage(PetWalkSizeScale.storageKey) private var petWalkSizeScale: Double = PetWalkSizeScale.default
@@ -30,6 +39,7 @@ struct SettingsView: View {
     /// 全局调色板存储 —— ColorPicker 改色后通过它更新 + 持久化
     @State private var paletteStore = PetPaletteStore.shared
     @State private var profileStore = ProfileSettingsStore.shared
+    @State private var ttsPlayback = TTSPlaybackController.shared
 
     enum Category: String, CaseIterable, Identifiable {
         case backend, pet, sound, privacy, system, about
@@ -74,6 +84,21 @@ struct SettingsView: View {
             detail
         }
         .frame(width: 620, height: 460)
+        .onAppear {
+            syncGatewayStatusTimer()
+        }
+        .onDisappear {
+            stopGatewayStatusTimer()
+        }
+        .onChange(of: selectedCategory) { _, _ in
+            syncGatewayStatusTimer()
+        }
+        .onChange(of: configViewingMode) { _, _ in
+            syncGatewayStatusTimer()
+        }
+        .onChange(of: selectedHermesPreset.id) { _, _ in
+            syncGatewayStatusTimer()
+        }
     }
 
     // MARK: - 侧栏
@@ -323,6 +348,7 @@ struct SettingsView: View {
     /// 本地档：Gateway 运行状态卡片（H9 核心）
     /// 跟 directAPI 的 opencodeEngineCard 视觉对齐
     private var hermesGatewayStatusCard: some View {
+        let _ = gatewayStatusTick
         let status = HermesGatewayManager.shared.status
         let (dotColor, statusText, tone): (Color, String, Color) = {
             switch status {
@@ -394,11 +420,6 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(.green.opacity(0.2), lineWidth: 0.5)
         )
-        // 1s tick 刷新 status（spawn 中的状态变化通过 @State 重新读 manager）
-        .id(gatewayStatusTick)
-        .onAppear {
-            startGatewayStatusTimer()
-        }
     }
 
     /// 本地档：高级折叠区（Key / 模型，默认隐藏；用户需要时点开调）
@@ -442,6 +463,7 @@ struct SettingsView: View {
 
     /// OpenClaw 连接状态卡片（小白文案：只显"已连接/连接中/未连接"，不显端口、不显技术词）
     private var openclawGatewayStatusCard: some View {
+        let _ = gatewayStatusTick
         let status = OpenClawGatewayManager.shared.status
         let (dotColor, statusText, tone): (Color, String, Color) = {
             switch status {
@@ -550,10 +572,6 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(fomoTint.opacity(0.35), lineWidth: 0.5)
         )
-        .id(gatewayStatusTick)
-        .onAppear {
-            startGatewayStatusTimer()
-        }
     }
 
     /// OpenClaw 高级设置（默认折叠 —— 一般用户不用打开）
@@ -722,16 +740,41 @@ struct SettingsView: View {
         }
     }
 
-    /// 1s tick 重渲染 Gateway 状态卡片（spawn 进度可视化）
-    private func startGatewayStatusTimer() {
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-            // 离开当前 mode 就停（避免后台一直 tick）
-            if selectedHermesPreset.id != "hermes-local" {
-                timer.invalidate()
-                return
-            }
-            gatewayStatusTick &+= 1
+    /// 是否需要轮询本地 Gateway 状态卡。
+    /// 只在设置页后端分类、且当前真的显示 Hermes 本地档或 OpenClaw 卡片时开启。
+    private var shouldPollGatewayStatus: Bool {
+        guard selectedCategory == .backend else { return false }
+        switch configViewingMode {
+        case .hermes:
+            return selectedHermesPreset.id == "hermes-local"
+        case .openclaw:
+            return true
+        default:
+            return false
         }
+    }
+
+    /// 同步设置页里的 Gateway 状态轮询。
+    /// 这里必须保证全页最多只有一个 Timer；否则每次 tick 触发重绘再 onAppear，
+    /// 会不断叠加新的 Timer，最终把主线程和布局系统拖死。
+    private func syncGatewayStatusTimer() {
+        guard shouldPollGatewayStatus else {
+            stopGatewayStatusTimer()
+            return
+        }
+        guard gatewayStatusTimer == nil else { return }
+
+        gatewayStatusTick &+= 1
+        gatewayStatusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            Task { @MainActor in
+                gatewayStatusTick &+= 1
+            }
+        }
+    }
+
+    private func stopGatewayStatusTimer() {
+        gatewayStatusTimer?.invalidate()
+        gatewayStatusTimer = nil
     }
 
     /// Hermes 底部说明文字，按预设档位区分
@@ -1583,6 +1626,10 @@ struct SettingsView: View {
 
     private var soundSection: some View {
         VStack(alignment: .leading, spacing: 14) {
+            ttsSection
+
+            Divider()
+
             // 顶部提示卡 —— 让用户秒懂"每行可以独立开关 / 换音 / 用自己的音频文件"
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "info.circle.fill")
@@ -1614,6 +1661,125 @@ struct SettingsView: View {
             Divider()
             soundRow(event: .error,       binding: $viewModel.errorSound)
         }
+    }
+
+    private var ttsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("AI 回复朗读", systemImage: "speaker.wave.2.fill")
+                    .font(.system(size: 13, weight: .medium))
+                Spacer()
+                Toggle("自动播放", isOn: $ttsAutoPlayEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+            }
+
+            Text("使用小米 MiMo TTS。聊天气泡 hover 时，复制按钮旁边会出现小播放按钮。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 9) {
+                HStack(spacing: 8) {
+                    Text("API Key")
+                        .font(.system(size: 12))
+                        .frame(width: 84, alignment: .leading)
+                    if showTTSKey {
+                        TextField("在 platform.xiaomimimo.com 获取", text: $ttsMimoApiKey)
+                    } else {
+                        SecureField("在 platform.xiaomimimo.com 获取", text: $ttsMimoApiKey)
+                    }
+                    Button {
+                        showTTSKey.toggle()
+                    } label: {
+                        Image(systemName: showTTSKey ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(showTTSKey ? "隐藏 API Key" : "显示 API Key")
+                }
+
+                HStack(spacing: 8) {
+                    Text("Base URL")
+                        .font(.system(size: 12))
+                        .frame(width: 84, alignment: .leading)
+                    TextField(TTSPlaybackSettings.defaultBaseURL, text: $ttsMimoBaseURL)
+                }
+
+                HStack(spacing: 8) {
+                    Text("模型")
+                        .font(.system(size: 12))
+                        .frame(width: 84, alignment: .leading)
+                    Picker("", selection: $ttsMimoModel) {
+                        ForEach(TTSPlaybackSettings.presetModels, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 260)
+                    Spacer()
+                }
+
+                if ttsMimoModel == "mimo-v2.5-tts-voicedesign" {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("音色描述")
+                            .font(.system(size: 12))
+                            .frame(width: 84, alignment: .leading)
+                            .padding(.top, 4)
+                        TextEditor(text: $ttsMimoVoiceDesignDesc)
+                            .font(.system(size: 12))
+                            .frame(minHeight: 46, maxHeight: 64)
+                            .scrollContentBackground(.hidden)
+                            .background(Color.secondary.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Text("音色")
+                            .font(.system(size: 12))
+                            .frame(width: 84, alignment: .leading)
+                        TextField(TTSPlaybackSettings.defaultVoice, text: $ttsMimoVoice)
+                    }
+                }
+
+                HStack(alignment: .top, spacing: 8) {
+                    Text("风格指令")
+                        .font(.system(size: 12))
+                        .frame(width: 84, alignment: .leading)
+                        .padding(.top, 4)
+                    TextEditor(text: $ttsMimoStylePrompt)
+                        .font(.system(size: 12))
+                        .frame(minHeight: 42, maxHeight: 58)
+                        .scrollContentBackground(.hidden)
+                        .background(Color.secondary.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+            }
+
+            HStack {
+                Button {
+                    TTSPlaybackController.shared.toggle(
+                        messageID: "settings-tts-test",
+                        content: "你好，这是一个语音测试。"
+                    )
+                } label: {
+                    Label("试听", systemImage: "play.circle.fill")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .controlSize(.small)
+                .disabled(ttsMimoApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                if let err = ttsPlayback.lastError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
+                Spacer()
+            }
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.06))
+        .cornerRadius(8)
     }
 
     private func soundRow(event: SoundEvent, binding: Binding<String>) -> some View {

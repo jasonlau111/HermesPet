@@ -26,6 +26,12 @@ enum OpenCodeConfigGenerator {
             withJSONObject: config,
             options: [.prettyPrinted, .sortedKeys]
         ) else { return }
+        if let raw = String(data: data, encoding: .utf8),
+           let validation = HermesRustCore.shared.validate(kind: "json", text: raw),
+           !validation.ok {
+            NSLog("[OpenCodeConfig] Rust JSON validation failed: %@", validation.error ?? "(unknown)")
+            return
+        }
 
         try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
         try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)

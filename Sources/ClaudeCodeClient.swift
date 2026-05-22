@@ -82,25 +82,30 @@ final class ClaudeCodeClient: @unchecked Sendable {
 mode 字段从 [hermes / claudeCode / codex] 三选一 —— 选最适合该任务的引擎（写作翻译 → hermes，改文件跑命令 → claudeCode，生图 → codex）。
 eta 是可选的预估时长（"30m" / "1h" / "5m"）。**只在确实是任务规划场景才用此格式，普通对话仍走自然语言回复**。
 
+\(MessageTimeAwareness.systemInstruction)
+
 """
 
     private func buildPrompt(messages: [ChatMessage]) -> String {
         let convo = messages.filter { $0.role == .user || $0.role == .assistant }
-        guard let latest = convo.last, latest.role == .user else {
-            return convo.map { "\($0.role == .user ? "用户" : "助手"): \($0.content)" }.joined(separator: "\n\n") + Self.clientHints
+        let renderedConvo = MessageTimeAwareness.render(messages: convo)
+        guard let latestRendered = renderedConvo.last, latestRendered.message.role == .user else {
+            return renderedConvo.map { "\($0.message.role == .user ? "用户" : "助手"): \($0.content)" }.joined(separator: "\n\n") + Self.clientHints
         }
+        let latest = latestRendered.message
+        let latestContent = latestRendered.content
 
         // 把最新这条用户消息附带的图片写到临时目录
         let imagePaths = saveImagesToTemp(latest.images)
         let docPaths = latest.documentPaths
-        let history = convo.dropLast()
+        let history = renderedConvo.dropLast()
 
         // 单轮 + 没历史：精简 prompt
         if history.isEmpty {
             if imagePaths.isEmpty && docPaths.isEmpty {
-                return latest.content + Self.clientHints
+                return latestContent + Self.clientHints
             }
-            var p = latest.content
+            var p = latestContent
             if !imagePaths.isEmpty {
                 p += "\n\n附带的图片（请用 Read 工具查看）：\n"
                 for path in imagePaths { p += path + "\n" }
@@ -117,15 +122,15 @@ eta 是可选的预估时长（"30m" / "1h" / "5m"）。**只在确实是任务�
         lines.append("以下是我们之前的对话历史（其中的「助手」可能是 Hermes 也可能是其他 AI）。请基于这些上下文回答最后一个新问题，不要重复或总结历史。")
         lines.append("")
         lines.append("--- 历史开始 ---")
-        for msg in history {
-            let who = msg.role == .user ? "用户" : "助手"
-            lines.append("【\(who)】\(msg.content)")
+        for item in history {
+            let who = item.message.role == .user ? "用户" : "助手"
+            lines.append("【\(who)】\(item.content)")
             lines.append("")
         }
         lines.append("--- 历史结束 ---")
         lines.append("")
         lines.append("现在用户问：")
-        lines.append(latest.content)
+        lines.append(latestContent)
         if !imagePaths.isEmpty {
             lines.append("")
             lines.append("用户附带了以下图片，请用 Read 工具查看：")

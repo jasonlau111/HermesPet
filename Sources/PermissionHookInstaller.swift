@@ -27,27 +27,14 @@ enum PermissionHookInstaller {
         }
 
         var hooks = (settings["hooks"] as? [String: Any]) ?? [:]
-        var preTool = (hooks["PreToolUse"] as? [[String: Any]]) ?? []
-
-        // 检查是否已注入过（按 hermespet=true 标识幂等去重）
-        preTool.removeAll { entry in
-            guard let inner = entry["hooks"] as? [[String: Any]] else { return false }
-            return inner.contains { ($0["hermespet"] as? Bool) == true }
-        }
-
-        // 追加 HermesPet hook：matcher=".*" 拦截所有工具，type=http POST 到我们 server
-        let hermesHook: [String: Any] = [
-            "matcher": ".*",
-            "hooks": [[
-                "type": "http",
-                "url": "http://127.0.0.1:\(port)/permission-hook",
-                "timeout": 86400,   // 24h，等用户慢慢决策
-                "hermespet": true   // 幂等标识
-            ]]
-        ]
-        preTool.insert(hermesHook, at: 0)
-
-        hooks["PreToolUse"] = preTool
+        hooks["PreToolUse"] = mergedClaudeHooks(
+            existing: (hooks["PreToolUse"] as? [[String: Any]]) ?? [],
+            port: port
+        )
+        hooks["PermissionRequest"] = mergedClaudeHooks(
+            existing: (hooks["PermissionRequest"] as? [[String: Any]]) ?? [],
+            port: port
+        )
         settings["hooks"] = hooks
 
         // 确保目录存在
@@ -75,17 +62,15 @@ enum PermissionHookInstaller {
         }
 
         var hooks = (settings["hooks"] as? [String: Any]) ?? [:]
-        var preTool = (hooks["PreToolUse"] as? [[String: Any]]) ?? []
-        preTool.removeAll { entry in
-            guard let inner = entry["hooks"] as? [[String: Any]] else { return false }
-            return inner.contains { ($0["hermespet"] as? Bool) == true }
-        }
+        let preTool = cleanedClaudeHooks((hooks["PreToolUse"] as? [[String: Any]]) ?? [])
+        let permissionRequest = cleanedClaudeHooks((hooks["PermissionRequest"] as? [[String: Any]]) ?? [])
 
-        if preTool.isEmpty {
-            hooks.removeValue(forKey: "PreToolUse")
-        } else {
-            hooks["PreToolUse"] = preTool
-        }
+        if preTool.isEmpty { hooks.removeValue(forKey: "PreToolUse") }
+        else { hooks["PreToolUse"] = preTool }
+
+        if permissionRequest.isEmpty { hooks.removeValue(forKey: "PermissionRequest") }
+        else { hooks["PermissionRequest"] = permissionRequest }
+
         if hooks.isEmpty {
             settings.removeValue(forKey: "hooks")
         } else {
@@ -98,6 +83,28 @@ enum PermissionHookInstaller {
         ) {
             try? outData.write(to: URL(fileURLWithPath: path), options: .atomic)
             NSLog("[PermissionHook] Claude hook uninstalled")
+        }
+    }
+
+    private static func mergedClaudeHooks(existing: [[String: Any]], port: UInt16) -> [[String: Any]] {
+        var hooks = cleanedClaudeHooks(existing)
+        let hermesHook: [String: Any] = [
+            "matcher": ".*",
+            "hooks": [[
+                "type": "http",
+                "url": "http://127.0.0.1:\(port)/permission-hook",
+                "timeout": 86400,
+                "hermespet": true
+            ]]
+        ]
+        hooks.insert(hermesHook, at: 0)
+        return hooks
+    }
+
+    private static func cleanedClaudeHooks(_ entries: [[String: Any]]) -> [[String: Any]] {
+        entries.filter { entry in
+            guard let inner = entry["hooks"] as? [[String: Any]] else { return true }
+            return !inner.contains { ($0["hermespet"] as? Bool) == true }
         }
     }
 
