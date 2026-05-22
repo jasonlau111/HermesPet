@@ -317,7 +317,7 @@ struct ResponseSummaryCardView: View {
         case .claudeCode: return "Clawd"
         case .directAPI:  return "云朵"
         case .openclaw:   return "fomo"
-        case .hermes:     return "小马"
+        case .hermes:     return "Hermes"
         case .codex:      return "coco"
         }
     }
@@ -481,7 +481,7 @@ struct ResponseSummaryCardView: View {
             case .openclaw:
                 FomoView(pose: .rest, height: height, isWalking: false, palette: palette, animated: anim)
             case .hermes:
-                HorseView(pose: .rest, height: height, isWalking: false, palette: palette, animated: anim)
+                HermesThinkingVideoSprite(height: height, animated: anim)
             case .codex:
                 TerminalView(pose: .rest, height: height, isWalking: false,
                              isWorking: false, palette: palette, animated: anim)

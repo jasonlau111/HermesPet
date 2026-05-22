@@ -353,8 +353,7 @@ private struct IntentSuggestionCardView: View {
                 FomoView(pose: .rest, height: height, isWalking: false,
                          palette: palette, animated: anim)
             case .hermes:
-                HorseView(pose: .rest, height: height, isWalking: false,
-                          palette: palette, animated: anim)
+                HermesThinkingVideoSprite(height: height, animated: anim)
             case .codex:
                 TerminalView(pose: .rest, height: height, isWalking: false,
                              isWorking: false, palette: palette, animated: anim)
