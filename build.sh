@@ -45,6 +45,14 @@ if [ -f "$SCRIPT_DIR/AppIcon.icns" ]; then
     echo "🎨 已复制 AppIcon.icns"
 fi
 
+# Copy SwiftPM resource bundles, e.g. video assets declared in Package.swift.
+for RESOURCE_BUNDLE in "$BUILD_DIR/apple/Products/Release"/*.bundle; do
+    if [ -d "$RESOURCE_BUNDLE" ]; then
+        cp -R "$RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
+        echo "📦 已复制资源包 $(basename "$RESOURCE_BUNDLE")"
+    fi
+done
+
 # === Bundle opencode binary（在线 AI 引擎）===
 # opencode (MIT, anomalyco/opencode) 是开源 AI coding agent CLI。
 # bundle 进 .app 让在线 AI 模式无需任何外部 CLI 依赖。
