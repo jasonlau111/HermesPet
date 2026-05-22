@@ -1714,12 +1714,15 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .frame(width: 84, alignment: .leading)
                     Picker("", selection: $ttsMimoModel) {
-                        ForEach(TTSPlaybackSettings.presetModels, id: \.self) { model in
-                            Text(model).tag(model)
+                        ForEach(TTSPlaybackSettings.presetModels) { model in
+                            Text(model.label).tag(model.id)
                         }
                     }
                     .labelsHidden()
                     .frame(maxWidth: 260)
+                    Text(TTSPlaybackSettings.modelDescription(for: ttsMimoModel))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     Spacer()
                 }
 
@@ -1729,19 +1732,66 @@ struct SettingsView: View {
                             .font(.system(size: 12))
                             .frame(width: 84, alignment: .leading)
                             .padding(.top, 4)
-                        TextEditor(text: $ttsMimoVoiceDesignDesc)
-                            .font(.system(size: 12))
-                            .frame(minHeight: 46, maxHeight: 64)
-                            .scrollContentBackground(.hidden)
-                            .background(Color.secondary.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        ZStack(alignment: .topLeading) {
+                            TextEditor(text: $ttsMimoVoiceDesignDesc)
+                                .font(.system(size: 12))
+                                .frame(minHeight: 46, maxHeight: 64)
+                                .scrollContentBackground(.hidden)
+                            if ttsMimoVoiceDesignDesc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text("例如：23 岁台北女孩声音，甜美清亮，带御姐音，语速稍快")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 8)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .background(Color.secondary.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                 } else {
-                    HStack(spacing: 8) {
-                        Text("音色")
-                            .font(.system(size: 12))
-                            .frame(width: 84, alignment: .leading)
-                        TextField(TTSPlaybackSettings.defaultVoice, text: $ttsMimoVoice)
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(spacing: 8) {
+                            Text("音色")
+                                .font(.system(size: 12))
+                                .frame(width: 84, alignment: .leading)
+                            Menu {
+                                ForEach(TTSPlaybackSettings.presetVoices) { voice in
+                                    Button {
+                                        ttsMimoVoice = voice.id
+                                    } label: {
+                                        if ttsMimoVoice == voice.id {
+                                            Label(voice.label, systemImage: "checkmark")
+                                        } else {
+                                            Text(voice.label)
+                                        }
+                                    }
+                                }
+                            } label: {
+                                HStack {
+                                    Text(TTSPlaybackSettings.voiceLabel(for: ttsMimoVoice))
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 6)
+                                .background(Color.secondary.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        HStack(spacing: 8) {
+                            Text("自定义")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 84, alignment: .leading)
+                            TextField("可直接输入 MiMo 音色 ID", text: $ttsMimoVoice)
+                                .textFieldStyle(.roundedBorder)
+                        }
                     }
                 }
 

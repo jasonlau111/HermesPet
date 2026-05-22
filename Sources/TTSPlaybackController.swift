@@ -3,6 +3,17 @@ import Foundation
 import Observation
 
 enum TTSPlaybackSettings {
+    struct ModelPreset: Identifiable, Hashable {
+        let id: String
+        let label: String
+        let description: String
+    }
+
+    struct VoicePreset: Identifiable, Hashable {
+        let id: String
+        let label: String
+    }
+
     static let autoPlayKey = "ttsAutoPlayEnabled"
     static let mimoApiKeyKey = "ttsMimoApiKey"
     static let mimoBaseURLKey = "ttsMimoBaseURL"
@@ -15,15 +26,48 @@ enum TTSPlaybackSettings {
     static let defaultModel = "mimo-v2.5-tts"
     static let defaultVoice = "冰糖"
 
-    static let presetModels = [
-        "mimo-v2.5-tts",
-        "mimo-v2.5-tts-voicedesign",
-        "mimo-v2.5-tts-voiceclone"
+    static let presetModels: [ModelPreset] = [
+        ModelPreset(
+            id: "mimo-v2.5-tts",
+            label: "预置音色",
+            description: "从 MiMo 内置音色中选择"
+        ),
+        ModelPreset(
+            id: "mimo-v2.5-tts-voicedesign",
+            label: "音色设计",
+            description: "用自然语言描述想要的音色"
+        ),
+        ModelPreset(
+            id: "mimo-v2.5-tts-voiceclone",
+            label: "音色复刻",
+            description: "使用已配置的复刻音色"
+        )
     ]
 
-    static let presetVoices = [
-        "冰糖", "Chloe (English-Female)", "Ethan (English-Male)"
+    static let presetVoices: [VoicePreset] = [
+        VoicePreset(id: "冰糖", label: "冰糖（中文·女）"),
+        VoicePreset(id: "茉莉", label: "茉莉（中文·女）"),
+        VoicePreset(id: "苏打", label: "苏打（中文·男）"),
+        VoicePreset(id: "白桦", label: "白桦（中文·男）"),
+        VoicePreset(id: "Mia", label: "Mia (English-Female)"),
+        VoicePreset(id: "Chloe", label: "Chloe (English-Female)"),
+        VoicePreset(id: "Milo", label: "Milo (English-Male)"),
+        VoicePreset(id: "Rose", label: "Rose (English-Female)"),
+        VoicePreset(id: "Ethan", label: "Ethan (English-Male)"),
+        VoicePreset(id: "Noah", label: "Noah (English-Male)")
     ]
+
+    static func modelLabel(for id: String) -> String {
+        presetModels.first { $0.id == id }?.label ?? id
+    }
+
+    static func modelDescription(for id: String) -> String {
+        presetModels.first { $0.id == id }?.description ?? "自定义模型"
+    }
+
+    static func voiceLabel(for id: String) -> String {
+        presetVoices.first { $0.id == id }?.label ?? (id.isEmpty ? defaultVoice : id)
+    }
 
     static var autoPlayEnabled: Bool {
         UserDefaults.standard.bool(forKey: autoPlayKey)
@@ -260,9 +304,11 @@ final class TTSPlaybackController {
 
         let userContent: String
         if model == "mimo-v2.5-tts-voicedesign" {
+            let designDesc = voiceDesignDesc.trimmingCharacters(in: .whitespacesAndNewlines)
+            let designBase = designDesc.isEmpty ? "默认音色" : designDesc
             userContent = stylePrompt.isEmpty
-                ? (voiceDesignDesc.isEmpty ? "默认音色" : voiceDesignDesc)
-                : "\(voiceDesignDesc)\n风格指令：\(stylePrompt)"
+                ? designBase
+                : "\(designBase)\n风格指令：\(stylePrompt)"
         } else {
             userContent = stylePrompt
         }

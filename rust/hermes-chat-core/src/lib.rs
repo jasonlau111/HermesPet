@@ -171,14 +171,15 @@ pub extern "C" fn hermes_build_mimo_tts_request_json(
         .unwrap_or("");
 
     let user_content = if model == "mimo-v2.5-tts-voicedesign" {
-        if style_prompt.trim().is_empty() {
-            if voice_design_desc.trim().is_empty() {
-                "默认音色".to_string()
-            } else {
-                voice_design_desc.to_string()
-            }
+        let design_desc = if voice_design_desc.trim().is_empty() {
+            "默认音色"
         } else {
-            format!("{}\n风格指令：{}", voice_design_desc, style_prompt)
+            voice_design_desc
+        };
+        if style_prompt.trim().is_empty() {
+            design_desc.to_string()
+        } else {
+            format!("{}\n风格指令：{}", design_desc, style_prompt)
         }
     } else {
         style_prompt.to_string()
