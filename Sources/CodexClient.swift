@@ -21,16 +21,19 @@ final class CodexClient: @unchecked Sendable {
     }
 
     private let imagesLock = NSLock()
-    private var _pendingImages: [Data] = []
+    private var _pendingImagesByConversation: [String: [Data]] = [:]
+    private var claimedGeneratedImagePaths: Set<String> = []
     private let sessionLock = NSLock()
     private static let sessionMapKey = "codexSessionIDsByConversationID"
 
-    /// stream 完成后由 ViewModel 调用，消费本次生成的图片
-    func takeGeneratedImages() -> [Data] {
+    /// stream 完成后由 ViewModel / CanvasService 调用，消费指定对话这一轮生成的图片。
+    /// conversationID 为空时使用 legacy bucket，兼容一次性画布任务。
+    func takeGeneratedImages(conversationID: String? = nil) -> [Data] {
+        let key = imageBucketKey(conversationID)
         imagesLock.lock()
         defer { imagesLock.unlock() }
-        let imgs = _pendingImages
-        _pendingImages = []
+        let imgs = _pendingImagesByConversation[key] ?? []
+        _pendingImagesByConversation[key] = nil
         return imgs
     }
 
@@ -111,7 +114,7 @@ final class CodexClient: @unchecked Sendable {
 
     /// 把完整对话历史拼成单 prompt（codex exec 不支持原生多轮，靠 prompt 传上下文）。
     /// 文档附件（拖入的 PDF / txt / md 等）以**用户真实绝对路径**写在 prompt 末尾，让 Codex 用自己的 shell 工具读。
-    /// 我们已开 --dangerously-bypass-approvals-and-sandbox，Codex 能读 cwd 之外任意路径。
+    /// 权限 UI 关闭时走 bypass；打开时交给 Codex 默认审批 / HermesPet hook 决策。
     /// 客户端能力提示 —— 跟 ClaudeCodeClient 一样告诉 Codex 用 markdown 列表问选择题
     private static let clientHints = """
 
@@ -210,16 +213,17 @@ final class CodexClient: @unchecked Sendable {
                     "exec",
                     "resume",
                     "--json",
-                    "--skip-git-repo-check",
-                    "--dangerously-bypass-approvals-and-sandbox"
+                    "--skip-git-repo-check"
                 ]
             } else {
                 args = [
                     "exec",
                     "--json",
-                    "--skip-git-repo-check",
-                    "--dangerously-bypass-approvals-and-sandbox"
+                    "--skip-git-repo-check"
                 ]
+            }
+            if !UserDefaults.standard.bool(forKey: "permissionUIEnabled") {
+                args.append("--dangerously-bypass-approvals-and-sandbox")
             }
             // 每张输入图加一个 -i <path>，让 codex 视觉识别
             for path in imageFiles {
@@ -365,13 +369,19 @@ final class CodexClient: @unchecked Sendable {
 
                 // 扫新增的图片
                 let afterSnapshot = Self.scanImageFiles(in: codexImageDir)
-                let newPaths = afterSnapshot.subtracting(beforeSnapshot)
+                let candidatePaths = afterSnapshot.subtracting(beforeSnapshot)
+                self.imagesLock.lock()
+                let newPaths = candidatePaths.filter { !self.claimedGeneratedImagePaths.contains($0) }
+                self.claimedGeneratedImagePaths.formUnion(newPaths)
+                self.imagesLock.unlock()
+
                 let pngs: [Data] = newPaths.compactMap { path in
                     try? Data(contentsOf: URL(fileURLWithPath: path))
                 }
                 if !pngs.isEmpty {
+                    let bucket = self.imageBucketKey(conversationID)
                     self.imagesLock.lock()
-                    self._pendingImages.append(contentsOf: pngs)
+                    self._pendingImagesByConversation[bucket, default: []].append(contentsOf: pngs)
                     self.imagesLock.unlock()
                 }
 
@@ -412,6 +422,13 @@ final class CodexClient: @unchecked Sendable {
         defer { sessionLock.unlock() }
         let map = UserDefaults.standard.dictionary(forKey: Self.sessionMapKey) as? [String: String] ?? [:]
         return map[conversationID]
+    }
+
+    private func imageBucketKey(_ conversationID: String?) -> String {
+        if let conversationID, !conversationID.isEmpty {
+            return conversationID
+        }
+        return "__legacy__"
     }
 
     private func setSessionID(_ sessionID: String, for conversationID: String) {

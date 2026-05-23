@@ -49,7 +49,7 @@ final class CrashReporter {
         }
 
         let hermesFiles = files.filter {
-            ($0.hasPrefix("HermesPet") || $0.hasPrefix("Hermes 桌宠"))
+            ($0.hasPrefix("HermesPet") || $0.hasPrefix("Hermes 桌宠") || $0.hasPrefix("Jason hermes"))
                 && ($0.hasSuffix(".ips") || $0.hasSuffix(".crash"))
         }
 

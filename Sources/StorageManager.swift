@@ -8,7 +8,11 @@ final class StorageManager: @unchecked Sendable {
 
     private let fileManager = FileManager.default
     private let lock = NSLock()
+    private let saveQueue = DispatchQueue(label: "cc.hermespet.storage.save", qos: .utility)
+    private let saveDebounceInterval: TimeInterval = 0.25
     private var _lastLoadError: String?
+    private var pendingSaveWorkItem: DispatchWorkItem?
+    private var pendingSaveID: Int = 0
 
     /// 最近一次 loadConversations 失败的人类可读原因（线程安全）。
     /// 调用方（ChatViewModel）在 init 后立即读 → set errorMessage 让用户看到。
@@ -91,6 +95,55 @@ final class StorageManager: @unchecked Sendable {
     // MARK: - 多对话存读
 
     func saveConversations(_ conversations: [Conversation]) {
+        let snapshot = conversations
+        let saveID: Int
+        lock.lock()
+        pendingSaveWorkItem?.cancel()
+        pendingSaveID &+= 1
+        saveID = pendingSaveID
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.shouldRunSave(id: saveID) else { return }
+            self.writeConversations(snapshot)
+            self.finishSave(id: saveID)
+        }
+        pendingSaveWorkItem = item
+        lock.unlock()
+
+        saveQueue.asyncAfter(deadline: .now() + saveDebounceInterval, execute: item)
+    }
+
+    func saveConversationsImmediately(_ conversations: [Conversation]) {
+        lock.lock()
+        pendingSaveWorkItem?.cancel()
+        pendingSaveWorkItem = nil
+        pendingSaveID &+= 1
+        lock.unlock()
+        writeConversations(conversations)
+    }
+
+    func flushPendingSave() {
+        lock.lock()
+        let item = pendingSaveWorkItem
+        lock.unlock()
+        item?.perform()
+        saveQueue.sync {}
+    }
+
+    private func shouldRunSave(id: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return pendingSaveID == id && pendingSaveWorkItem != nil
+    }
+
+    private func finishSave(id: Int) {
+        lock.lock()
+        if pendingSaveID == id {
+            pendingSaveWorkItem = nil
+        }
+        lock.unlock()
+    }
+
+    private func writeConversations(_ conversations: [Conversation]) {
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -125,7 +178,7 @@ final class StorageManager: @unchecked Sendable {
 
         // 没有新版 —— 尝试从旧版 session.json 迁移
         if let migrated = migrateFromLegacySession() {
-            saveConversations([migrated])
+            saveConversationsImmediately([migrated])
             return [migrated]
         }
 
@@ -179,6 +232,11 @@ final class StorageManager: @unchecked Sendable {
     // MARK: - Utility
 
     func clearAll() {
+        lock.lock()
+        pendingSaveWorkItem?.cancel()
+        pendingSaveWorkItem = nil
+        pendingSaveID &+= 1
+        lock.unlock()
         try? fileManager.removeItem(at: conversationsFile)
         try? fileManager.removeItem(at: legacySessionFile)
     }

@@ -1948,6 +1948,12 @@ struct SettingsView: View {
     @AppStorage("userIntentEnabled") private var userIntentEnabled: Bool = false
     @State private var userIntentTodayCount: Int = 0
     @State private var showClearIntentConfirm = false
+    @AppStorage("periodicReviewEnabled") private var periodicReviewEnabled: Bool = true
+    @State private var growthTimelineEntries: [GrowthTimelineEntry] = []
+    @State private var isGeneratingPeriodicReview = false
+    @State private var syncingTimelineEntryID: String?
+    @State private var periodicReviewError: String?
+    @State private var showClearTimelineConfirm = false
 
     /// Wave C4：主出场偏好 —— "auto" / "pet" / "island"
     @AppStorage("intentChannelPreference") private var intentChannelPreferenceRaw: String = "auto"
@@ -2018,6 +2024,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            Divider()
+
+            periodicReviewSection
 
             Divider()
 
@@ -2098,10 +2108,164 @@ struct SettingsView: View {
         }
         .onAppear {
             refreshActivityStats()
+            loadGrowthTimeline()
             refreshIntentStats()
             loadBlacklist()
             loadObservations()
         }
+    }
+
+    private var periodicReviewSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            captionToggle(
+                icon: "chart.line.uptrend.xyaxis",
+                iconColor: .green,
+                title: "周期回顾 / 成长时间线",
+                caption: "Rust 后端读取本地活动库，生成阶段性回顾并保存到 ~/.hermespet/growth-timeline.json。\n默认只留在 Jason hermes；你点「同步到 Hermes」后，才把精选摘要写入 Hermes/Honcho 记忆。",
+                isOn: $periodicReviewEnabled
+            )
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("回顾由谁生成", systemImage: "sparkles")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("", selection: $viewModel.periodicReviewBackend) {
+                        ForEach(AgentMode.allCases.filter { EnabledModesStore.shared.isEnabled($0) }) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 140)
+                }
+                Text("活动聚合和时间线落盘在本机完成；只有生成回顾正文时会把摘要数据发给这里选择的 AI。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Label("成长时间线", systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    loadGrowthTimeline()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .help("刷新")
+
+                Button {
+                    generatePeriodicReviewNow()
+                } label: {
+                    Label(isGeneratingPeriodicReview ? "生成中" : "立即生成", systemImage: "wand.and.stars")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isGeneratingPeriodicReview || !periodicReviewEnabled)
+            }
+
+            if let periodicReviewError {
+                Text(periodicReviewError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if growthTimelineEntries.isEmpty {
+                Text("还没有成长时间线。生成后会出现在这里。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(growthTimelineEntries.prefix(5)) { entry in
+                        growthTimelineRow(entry)
+                    }
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button(role: .destructive) {
+                    showClearTimelineConfirm = true
+                } label: {
+                    Label("清空成长时间线", systemImage: "trash")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.bordered)
+                .confirmationDialog(
+                    "确定清空成长时间线吗？",
+                    isPresented: $showClearTimelineConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("清空", role: .destructive) {
+                        PeriodicReviewService.shared.clearTimeline()
+                        loadGrowthTimeline()
+                    }
+                    Button("取消", role: .cancel) {}
+                } message: {
+                    Text("只会删除 Jason hermes 本地时间线，不会删除已经同步到 Hermes/Honcho 的记忆。")
+                }
+            }
+        }
+    }
+
+    private func growthTimelineRow(_ entry: GrowthTimelineEntry) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(entry.date)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.green)
+                Text(entry.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                Spacer()
+                if entry.syncedAt != nil {
+                    Label("已同步", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.green)
+                } else {
+                    Button {
+                        syncGrowthTimelineEntry(entry)
+                    } label: {
+                        Label(syncingTimelineEntryID == entry.id ? "同步中" : "同步到 Hermes", systemImage: "arrow.up.circle")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(syncingTimelineEntryID != nil)
+                }
+            }
+
+            Text(entry.review)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(4)
+
+            if !entry.syncSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("精选摘要")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                    Text(entry.syncSummary)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(5)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.green.opacity(0.06))
+                .cornerRadius(6)
+            }
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.025))
+        .cornerRadius(8)
     }
 
     /// 意图感知开关 + 简介 + 今日采样数 + 清空按钮（v1.3 Phase 1）
@@ -2493,6 +2657,38 @@ struct SettingsView: View {
                 NSLog("[UserIntent] 已导出到 \(url.path) (\(rows.count) 条)")
             } catch {
                 NSLog("[UserIntent] 导出失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func loadGrowthTimeline() {
+        growthTimelineEntries = PeriodicReviewService.shared.loadTimeline()
+    }
+
+    private func generatePeriodicReviewNow() {
+        guard !isGeneratingPeriodicReview else { return }
+        periodicReviewError = nil
+        isGeneratingPeriodicReview = true
+        Task { @MainActor in
+            defer { isGeneratingPeriodicReview = false }
+            do {
+                _ = try await PeriodicReviewService.shared.generateNow(viewModel: viewModel)
+                loadGrowthTimeline()
+            } catch {
+                periodicReviewError = error.localizedDescription
+            }
+        }
+    }
+
+    private func syncGrowthTimelineEntry(_ entry: GrowthTimelineEntry) {
+        periodicReviewError = nil
+        syncingTimelineEntryID = entry.id
+        Task { @MainActor in
+            defer { syncingTimelineEntryID = nil }
+            do {
+                growthTimelineEntries = try await PeriodicReviewService.shared.syncToHermes(entry)
+            } catch {
+                periodicReviewError = error.localizedDescription
             }
         }
     }

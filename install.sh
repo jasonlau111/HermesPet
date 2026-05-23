@@ -15,9 +15,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 APP_NAME="HermesPet"
-DISPLAY_NAME="Hermes 桌宠"
+DISPLAY_NAME="Jason hermes"
 SOURCE="$SCRIPT_DIR/$APP_NAME.app"
 TARGET="/Applications/$DISPLAY_NAME.app"
+LEGACY_TARGET="/Applications/Hermes 桌宠.app"
+HERMES_CACHE_DIR="$HOME/Library/Caches/HermesPet"
 
 # 1. 构建（build.sh 内部已经会用本地 Apple Development 证书签名）
 echo "🏗️  构建中..."
@@ -25,7 +27,7 @@ echo "🏗️  构建中..."
 
 # 2. 退出在跑的版本（如果有）
 # 注意：用精确进程名匹配 ($APP_NAME)，不要用 .app 路径，
-# 因为 /Applications 下的 bundle 是 "Hermes 桌宠.app"（中文），跟 source 端 "HermesPet.app" 不一样。
+# 因为 /Applications 下的 bundle 显示名跟 source 端 "HermesPet.app" 不一样。
 # 之前用 -f pattern 匹配 .app 路径会漏杀 → 旧进程残留 → install 完成但用户跑的还是旧代码。
 if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
     echo "🛑 退出当前运行的 $DISPLAY_NAME..."
@@ -49,9 +51,26 @@ if pgrep -af "Application Support/HermesPet/bin/opencode" >/dev/null 2>&1; then
     sleep 0.4
 fi
 
+# Claude/Codex 是 HermesPet 作为子进程拉起的；强杀主进程做覆盖安装时，
+# 它们可能来不及收到 cancellation，变成 launchd 收养的高 CPU 孤儿进程。
+# 只按 HermesPet 专用 cache / input 路径匹配，避免误杀用户手动开的 claude/codex。
+if pgrep -af "$HERMES_CACHE_DIR" >/dev/null 2>&1; then
+    echo "🧹 清理 HermesPet 残留 Claude/Codex 子进程..."
+    pkill -f "$HERMES_CACHE_DIR" || true
+    sleep 0.2
+fi
+if pgrep -af "HermesPet/codex-inputs" >/dev/null 2>&1; then
+    echo "🧹 清理 HermesPet 残留 Codex 输入进程..."
+    pkill -f "HermesPet/codex-inputs" || true
+    sleep 0.2
+fi
+
 # 3. 覆盖安装到 /Applications
 echo "📦 安装到 $TARGET..."
 rm -rf "$TARGET"
+if [ "$LEGACY_TARGET" != "$TARGET" ]; then
+    rm -rf "$LEGACY_TARGET"
+fi
 cp -R "$SOURCE" "$TARGET"
 
 # 4. 启动新版

@@ -373,7 +373,7 @@ final class UpdateChecker {
         let alert = NSAlert()
         alert.messageText = "新版已挂载，请拖入应用程序"
         alert.informativeText = """
-        Finder 已经打开新版 DMG。请把里面的「Hermes 桌宠」拖到旁边的「应用程序」文件夹替换旧版即可。
+        Finder 已经打开新版 DMG。请把里面的「Jason hermes」拖到旁边的「应用程序」文件夹替换旧版即可。
 
         替换完成后退出当前版本（菜单栏右键 → 退出），重新打开新版本生效。
         """

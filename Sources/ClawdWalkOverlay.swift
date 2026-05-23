@@ -23,7 +23,7 @@ import SwiftUI
 /// 实现要点：
 ///   - 用 NSPanel `.nonactivatingPanel`，level 同灵动岛 statusBar
 ///   - 窗口尺寸 = sprite 实际渲染区，避免大块透明区误吞点击
-///   - 单 Timer @ 30fps 驱动位移；pose / 表情 走 ClawdView 已有的 4 种姿势
+///   - 单 Timer @ 8fps 驱动位移；pose / 表情 走 ClawdView 已有的 4 种姿势
 @MainActor
 final class ClawdWalkController {
     static let shared = ClawdWalkController()
@@ -59,9 +59,9 @@ final class ClawdWalkController {
     private static let chaseSpeedMul: CGFloat = 1.6      // 鼠标靠近时小跑加速倍率
     private static let patrolSpeed: CGFloat = 60         // 巡视时下到桌面 / 回菜单栏速度
     private static let edgeMargin: CGFloat = 18          // 屏幕左右 18pt 内反弹
-    private static let tickInterval: TimeInterval = 1.0/30.0
-    /// 休息态 walkTimer 降频（6fps 够检测"该醒了吗" + 鼠标贴近惊醒）
-    private static let tickIntervalRest: TimeInterval = 1.0/6.0
+    private static let tickInterval: TimeInterval = 1.0/8.0
+    /// 休息态 walkTimer 降频（2fps 够检测"该醒了吗" + 鼠标贴近惊醒）
+    private static let tickIntervalRest: TimeInterval = 1.0/2.0
     /// 自由漫步累积活跃多久就"累了"想休息（随机区间，避免节奏机械）
     private static let restAfterActiveRange: ClosedRange<TimeInterval> = 30...55   // 走这么久才"累"想歇，大部分时间在动
     /// 一次休息时长（随机区间）
@@ -780,7 +780,7 @@ final class ClawdWalkController {
         }
     }
 
-    /// 进入休息态：冒一句"累了"，趴下不动，sprite 降到 12fps + walkTimer 降到 6fps 省电。
+    /// 进入休息态：冒一句"累了"，趴下不动，sprite 停帧 + walkTimer 降到 2fps 省电。
     private func enterRest(now: Date) {
         restingUntil = now.addingTimeInterval(Double.random(in: Self.restDurationRange))
         walkAccum = 0
@@ -794,7 +794,7 @@ final class ClawdWalkController {
         startWalkTimer(interval: Self.tickIntervalRest)
     }
 
-    /// 退出休息态：恢复 30fps + 正常漫步节奏。`announce` 时冒一句"睡饱啦"。
+    /// 退出休息态：恢复 8fps 正常漫步节奏。`announce` 时冒一句"睡饱啦"。
     private func wakeUp(now: Date, announce: Bool) {
         restingUntil = nil
         walkAccum = 0
@@ -830,6 +830,7 @@ final class ClawdWalkController {
         // —— 0) 气泡自动隐藏 ——
         if let hide = bubbleHideAt, now >= hide {
             state.bubbleVisible = false
+            bubbleWindow?.orderOut(nil)
             bubbleHideAt = nil
             // 显示完后立即定下一次冒泡时机
             nextBubbleAt = now.addingTimeInterval(randomBubbleInterval())
@@ -1480,7 +1481,7 @@ final class ClawdWalkController {
 
     /// 把气泡窗口对齐到 Clawd 中线上方 4pt
     private func syncBubbleWindow() {
-        guard let bw = bubbleWindow else { return }
+        guard state.bubbleVisible, let bw = bubbleWindow else { return }
         let cx = positionX + windowSize.width / 2
         let bx = cx - Self.bubbleSize.width / 2
         let by = walkY + windowSize.height + 2
@@ -1846,6 +1847,20 @@ struct ClawdWalkView: View {
         }
     }
 
+    private var shouldAnimateSprite: Bool {
+        guard state.spriteAnimated, !state.lowPower else { return false }
+        return state.isWalking
+            || state.isChasing
+            || state.isEating
+            || state.isBeingDragged
+            || state.isJumping
+            || abs(glassesProgress) > 0.01
+    }
+
+    private var activeFrameInterval: Double {
+        shouldAnimateSprite ? 1.0 / 12.0 : 1.0
+    }
+
     var body: some View {
         ZStack {
             // 按当前宠物种类切渲染。两种 sprite 应用同一套 scale/offset/animation modifier，
@@ -1854,11 +1869,10 @@ struct ClawdWalkView: View {
                 let palette = currentPalette
                 // 桌宠隐藏时（orderOut 后 spriteAnimated=false），sprite 切静态帧，
                 // sprite 内部 TimelineView 不再空转。
-                // 休息态（lowPower）同样彻底停 TimelineView —— 关键：.animation schedule 会持续
-                // 驱动屏幕刷新周期（即便降帧也不停 step），连带每个周期触发所有窗口（含不可见的
-                // 聊天窗 fullSizeContentView）重算 drag margins + 遍历焦点树，烧满 CPU。只有完全
-                // 去掉 TimelineView（画静态帧）才能让 display cycle 真正停下来。桌宠"睡着"本就静止。
-                let anim = state.spriteAnimated && !state.lowPower
+                // 空闲态彻底停 TimelineView；走路/追逐/拖动/吃文件时用 12fps 像素动画。
+                // 关键：TimelineView(.animation) 只要存在就会持续推进 display cycle，
+                // 即使画面变化很小也会让整个 SwiftUI/AppKit 窗口树参与提交。
+                let anim = shouldAnimateSprite
                 switch state.visual {
                 case .clawd:
                     // 把 state.isWalking 传给 ClawdView，让它内部播放官方走路动画
@@ -1885,8 +1899,7 @@ struct ClawdWalkView: View {
                                  palette: palette, animated: anim)
                 }
             }
-            // 休息态把 sprite 帧率从 30fps 降到 12fps（呼吸/眨眼仍流畅）省 CPU；走动/被逗时恢复 30fps
-            .environment(\.spriteFrameInterval, state.lowPower ? 1.0/12.0 : 1.0/30.0)
+            .environment(\.spriteFrameInterval, activeFrameInterval)
             // 朝向 + 吃东西时的整体缩放（鼓胀 / 缩小消失）合到一个 scaleEffect
             // 被拖动时整体放大 1.08，给"我被拎起来啦"的视觉反馈
             .scaleEffect(x: (state.facingRight ? 1 : -1) * state.eatScale * (state.isBeingDragged ? 1.08 : 1),

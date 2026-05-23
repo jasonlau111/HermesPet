@@ -7,16 +7,14 @@ struct ChatView: View {
     @State private var isDropTargeted = false
     /// 聊天历史默认只渲染最近一段，避免长对话把所有 Markdown view 都挂进 SwiftUI 树。
     @State private var visibleMessageLimit = 10
-    /// 聊天区是否贴近底部。用户手动上滑看历史时置 false，
-    /// 流式输出就不再强行 scrollTo bottom 抢滚动。
-    @State private var isMessagesNearBottom = true
+    /// 是否自动跟随最新消息。加载更早历史时临时关闭，避免刚展开就被拉回底部。
+    @State private var shouldAutoScrollToBottom = true
 
     /// 聊天正文字号缩放（⌘+ / ⌘- / ⌘0 控制）—— 持久化在 UserDefaults
     @AppStorage(ChatFontScale.storageKey) private var chatFontScale: Double = ChatFontScale.default
     /// ⌘+/⌘- 触发后短暂显示当前档位 toast（"字号 115%"），2s 自动消失
     @State private var fontScaleToast: String? = nil
 
-    private static let messagesScrollSpace = "HermesPetMessagesScroll"
     private static let messagesBottomAnchorID = "HermesPetMessagesBottomAnchor"
     private static let initialVisibleMessageLimit = 10
     private static let visibleMessagePageSize = 20
@@ -55,7 +53,7 @@ struct ChatView: View {
                 pendingDocuments: viewModel.pendingDocuments,
                 tint: headerTint,
                 onSend: {
-                    isMessagesNearBottom = true
+                    shouldAutoScrollToBottom = true
                     viewModel.sendMessage()
                 },
                 onCancel: { viewModel.cancelCurrentRequest() },
@@ -346,161 +344,160 @@ struct ChatView: View {
 
     private var messagesView: some View {
         ScrollViewReader { proxy in
-            GeometryReader { viewport in
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        if hiddenMessageCount > 0 {
-                            Button {
-                                let firstVisibleID = visibleMessages.first?.id
+            ScrollView {
+                VStack(spacing: 10) {
+                    if hiddenMessageCount > 0 {
+                        Button {
+                            let firstVisibleID = visibleMessages.first?.id
+                            shouldAutoScrollToBottom = false
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
                                 visibleMessageLimit = min(
                                     viewModel.messages.count,
                                     visibleMessageLimit + Self.visibleMessagePageSize
                                 )
-                                if let firstVisibleID {
-                                    DispatchQueue.main.async {
-                                        proxy.scrollTo(firstVisibleID, anchor: .top)
-                                    }
-                                }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "clock.arrow.circlepath")
-                                    Text("加载更早消息（\(hiddenMessageCount)）")
-                                }
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(.primary.opacity(0.06))
-                                )
                             }
-                            .buttonStyle(.plain)
-                            .padding(.top, 2)
-                        }
-
-                        // 新对话欢迎页：精致的 WelcomeView 替代纯文字欢迎语
-                        if showSuggestions {
-                            WelcomeView(mode: viewModel.agentMode, tint: headerTint)
-                                .padding(.top, 12)
-                                .padding(.bottom, 8)
-                                .transition(.opacity)
-
-                            // 轻量 Onboarding：Hermes 模式 + 没填 API Key 时显示"配置 Key"引导卡。
-                            // 不弹窗、不挡住其他 UI，点击即打开设置面板
-                            if showOnboardingCard {
-                                OnboardingCard(
-                                    tint: headerTint,
-                                    onTap: { viewModel.showSettings = true }
-                                )
-                                .padding(.horizontal, 8)
-                                .padding(.bottom, 4)
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                            }
-                        }
-
-                        ForEach(visibleMessages) { message in
-                            // 新对话状态下，"原始欢迎消息"由 WelcomeView 代替，不再显示这条 assistant 占位
-                            if !(showSuggestions && message.role == .assistant) {
-                                MessageBubbleView(
-                                    message: message,
-                                    agentMode: viewModel.agentMode,
-                                    conversationID: viewModel.activeConversationID,
-                                    onRetry: { viewModel.retryLastMessage() },
-                                    onChoiceSelected: { choice in
-                                        // 仅"填入输入框"，由用户手动按回车发送 —— 避免叙述性
-                                        // 编号列表（"先做 A / 再做 B / 最后 C"）被当成可点选项误触发送。
-                                        viewModel.inputText = choice
-                                        // 通知输入框抢回 firstResponder，让用户可以立即按回车
-                                        NotificationCenter.default.post(
-                                            name: .init("HermesPetFocusInputField"), object: nil)
-                                    },
-                                    onPinTask: { task in
-                                        // 📌 Pin → 创建任务 Pin 到桌面
-                                        PinCardController.pinTask(task)
-                                    },
-                                    onDispatchTask: { task in
-                                        // 🤖 让 AI 做 → 新建对话派发给推荐的 mode
-                                        viewModel.dispatchTaskToNewConversation(task)
-                                    }
-                                )
-                                    .id(message.id)
-                                    .transition(.asymmetric(
-                                        insertion: .opacity.combined(with: .move(edge: .bottom)),
-                                        removal: .opacity
-                                    ))
-                            }
-                        }
-
-                        // 新对话欢迎状态 —— 几个快捷启动卡片，点击即填入输入框
-                        if showSuggestions {
-                            SuggestionGrid(
-                                items: suggestionItems,
-                                tint: headerTint,
-                                onTap: { prompt in
-                                    viewModel.inputText = prompt
+                            if let firstVisibleID {
+                                DispatchQueue.main.async {
+                                    proxy.scrollTo(firstVisibleID, anchor: .top)
                                 }
-                            )
-                            .padding(.top, 4)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        }
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id(Self.messagesBottomAnchorID)
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "clock.arrow.circlepath")
+                                Text("加载更早消息（\(hiddenMessageCount)）")
+                            }
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
                             .background(
-                                GeometryReader { marker in
-                                    Color.clear.preference(
-                                        key: MessagesBottomYPreferenceKey.self,
-                                        value: marker.frame(in: .named(Self.messagesScrollSpace)).maxY
-                                    )
+                                Capsule(style: .continuous)
+                                    .fill(.primary.opacity(0.06))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
+                    }
+
+                    // 新对话欢迎页：精致的 WelcomeView 替代纯文字欢迎语
+                    if showSuggestions {
+                        WelcomeView(mode: viewModel.agentMode, tint: headerTint)
+                            .padding(.top, 12)
+                            .padding(.bottom, 8)
+
+                        // 轻量 Onboarding：Hermes 模式 + 没填 API Key 时显示"配置 Key"引导卡。
+                        // 不弹窗、不挡住其他 UI，点击即打开设置面板
+                        if showOnboardingCard {
+                            OnboardingCard(
+                                tint: headerTint,
+                                onTap: { viewModel.showSettings = true }
+                            )
+                            .padding(.horizontal, 8)
+                            .padding(.bottom, 4)
+                        }
+                    }
+
+                    ForEach(visibleMessages) { message in
+                        // 新对话状态下，"原始欢迎消息"由 WelcomeView 代替，不再显示这条 assistant 占位
+                        if !(showSuggestions && message.role == .assistant) {
+                            MessageBubbleView(
+                                message: message,
+                                agentMode: viewModel.agentMode,
+                                conversationID: viewModel.activeConversationID,
+                                onRetry: { viewModel.retryLastMessage() },
+                                onChoiceSelected: { choice in
+                                    // 仅"填入输入框"，由用户手动按回车发送 —— 避免叙述性
+                                    // 编号列表（"先做 A / 再做 B / 最后 C"）被当成可点选项误触发送。
+                                    viewModel.inputText = choice
+                                    // 通知输入框抢回 firstResponder，让用户可以立即按回车
+                                    NotificationCenter.default.post(
+                                        name: .init("HermesPetFocusInputField"), object: nil)
+                                },
+                                onPinTask: { task in
+                                    // 📌 Pin → 创建任务 Pin 到桌面
+                                    PinCardController.pinTask(task)
+                                },
+                                onDispatchTask: { task in
+                                    // 🤖 让 AI 做 → 新建对话派发给推荐的 mode
+                                    viewModel.dispatchTaskToNewConversation(task)
                                 }
                             )
+                            .id(message.id)
+                        }
                     }
-                    .padding(12)
-                    .animation(AnimTok.smooth, value: viewModel.messages.count)
-                    .animation(AnimTok.smooth, value: showSuggestions)
+
+                    // 新对话欢迎状态 —— 几个快捷启动卡片，点击即填入输入框
+                    if showSuggestions {
+                        SuggestionGrid(
+                            items: suggestionItems,
+                            tint: headerTint,
+                            onTap: { prompt in
+                                viewModel.inputText = prompt
+                                shouldAutoScrollToBottom = true
+                            }
+                        )
+                        .padding(.top, 4)
+                    }
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.messagesBottomAnchorID)
                 }
-                .coordinateSpace(name: Self.messagesScrollSpace)
-                .onPreferenceChange(MessagesBottomYPreferenceKey.self) { bottomY in
-                    let distanceToBottom = bottomY - viewport.size.height
-                    isMessagesNearBottom = distanceToBottom < 72
+                .padding(12)
+                .transaction { transaction in
+                    transaction.animation = nil
                 }
-                .onAppear {
+            }
+            .onAppear {
+                scrollToBottom(proxy, animated: false)
+            }
+            .onChange(of: viewModel.activeConversationID) { _, _ in
+                shouldAutoScrollToBottom = true
+                visibleMessageLimit = Self.initialVisibleMessageLimit
+                scrollToBottom(proxy, animated: false)
+            }
+            .onChange(of: viewModel.messages.count) { _, _ in
+                if shouldAutoScrollToBottom {
                     scrollToBottom(proxy, animated: false)
                 }
-                .onChange(of: viewModel.activeConversationID) { _, _ in
-                    isMessagesNearBottom = true
-                    visibleMessageLimit = Self.initialVisibleMessageLimit
+            }
+            .onChange(of: viewModel.messages.last?.content.count) { _, _ in
+                if viewModel.messages.last?.isStreaming == true, shouldAutoScrollToBottom {
                     scrollToBottom(proxy, animated: false)
                 }
-                .onChange(of: viewModel.messages.count) { _, _ in
-                    if isMessagesNearBottom {
-                        scrollToBottom(proxy)
-                    }
-                }
-                .onChange(of: viewModel.messages.last?.content.count) { _, _ in
-                    if viewModel.messages.last?.isStreaming == true, isMessagesNearBottom {
-                        // 流式期间用 instant scroll：每个 token 都跑 spring 动画会互相打断
-                        // → bubble 高度变化 + 没收敛的 scroll 一起 → 视觉颤抖
-                        scrollToBottom(proxy, animated: false)
-                    }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .init("HermesPetScrollToMessage"))) { note in
-                    if let msgID = note.userInfo?["messageID"] as? String {
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .init("HermesPetScrollToMessage"))) { note in
+                if let msgID = note.userInfo?["messageID"] as? String {
+                    shouldAutoScrollToBottom = false
+                    expandVisibleMessages(toInclude: msgID)
+                    DispatchQueue.main.async {
                         withAnimation(AnimTok.smooth) {
                             proxy.scrollTo(msgID, anchor: .center)
                         }
                     }
                 }
-                // 窗口从灵动岛展开 → 强制滚到底部。
-                // 隐藏期间 LazyVStack 卸载了 cell，再次显示时如果不主动 scroll，
-                // 用户会被带回对话开头（看到的是旧消息而非最新）。
-                .onReceive(NotificationCenter.default.publisher(for: .hermesPetChatWindowShown)) { _ in
-                    isMessagesNearBottom = true
-                    scrollToBottom(proxy, animated: false)
-                }
             }
+            // 窗口从灵动岛展开 → 强制滚到底部。
+            // 隐藏期间 VStack 卸载了 cell，再次显示时如果不主动 scroll，
+            // 用户会被带回对话开头（看到的是旧消息而非最新）。
+            .onReceive(NotificationCenter.default.publisher(for: .hermesPetChatWindowShown)) { _ in
+                shouldAutoScrollToBottom = true
+                scrollToBottom(proxy, animated: false)
+            }
+        }
+    }
+
+    private func expandVisibleMessages(toInclude messageID: String) {
+        guard let index = viewModel.messages.firstIndex(where: { $0.id == messageID }) else { return }
+        let requiredLimit = viewModel.messages.count - index
+        guard requiredLimit > visibleMessageLimit else { return }
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            visibleMessageLimit = min(viewModel.messages.count, requiredLimit)
         }
     }
 
@@ -513,14 +510,6 @@ struct ChatView: View {
         } else {
             proxy.scrollTo(Self.messagesBottomAnchorID, anchor: .bottom)
         }
-    }
-}
-
-private struct MessagesBottomYPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = .zero
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }
 
@@ -694,7 +683,7 @@ struct WelcomeView: View {
 
     private var welcomeTitle: String {
         switch mode {
-        case .hermes:     return "Hermes 桌宠"
+        case .hermes:     return "Jason hermes"
         case .directAPI:  return "在线 AI"
         case .openclaw:   return "OpenClaw"
         case .claudeCode: return "Claude Code"

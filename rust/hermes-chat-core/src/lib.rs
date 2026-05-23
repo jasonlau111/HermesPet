@@ -1,4 +1,6 @@
 use base64::Engine;
+use rusqlite::{params, Connection, OpenFlags};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::ffi::{c_char, CString};
 use std::fs;
@@ -358,6 +360,528 @@ pub extern "C" fn hermes_parse_opencode_health_json(
     }))
 }
 
+#[no_mangle]
+pub extern "C" fn hermes_periodic_review_prepare(
+    options_ptr: *const u8,
+    options_len: usize,
+) -> *mut c_char {
+    let Some(raw) = (unsafe { read_utf8(options_ptr, options_len) }) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(options) = serde_json::from_str::<PeriodicReviewOptions>(raw) else {
+        return json_string(json!({"ok": false, "error": "invalid periodic review options"}));
+    };
+
+    match build_periodic_review_prompt(&options) {
+        Ok(value) => json_string(value),
+        Err(err) => json_string(json!({"ok": false, "error": err})),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hermes_growth_timeline_load(
+    options_ptr: *const u8,
+    options_len: usize,
+) -> *mut c_char {
+    let Some(raw) = (unsafe { read_utf8(options_ptr, options_len) }) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(options) = serde_json::from_str::<TimelineOptions>(raw) else {
+        return json_string(json!({"ok": false, "error": "invalid timeline options"}));
+    };
+
+    match load_timeline(&options.timeline_path) {
+        Ok(store) => json_string(json!({"ok": true, "entries": store.entries})),
+        Err(err) => json_string(json!({"ok": false, "error": err})),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hermes_growth_timeline_save(
+    options_ptr: *const u8,
+    options_len: usize,
+    review_ptr: *const u8,
+    review_len: usize,
+) -> *mut c_char {
+    let Some(raw) = (unsafe { read_utf8(options_ptr, options_len) }) else {
+        return std::ptr::null_mut();
+    };
+    let Some(review_text) = (unsafe { read_utf8(review_ptr, review_len) }) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(options) = serde_json::from_str::<PeriodicReviewOptions>(raw) else {
+        return json_string(json!({"ok": false, "error": "invalid periodic review options"}));
+    };
+
+    match save_timeline_entry(&options, review_text) {
+        Ok((entry, entries)) => json_string(json!({"ok": true, "entry": entry, "entries": entries})),
+        Err(err) => json_string(json!({"ok": false, "error": err})),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hermes_growth_timeline_mark_synced(
+    options_ptr: *const u8,
+    options_len: usize,
+) -> *mut c_char {
+    let Some(raw) = (unsafe { read_utf8(options_ptr, options_len) }) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(options) = serde_json::from_str::<TimelineSyncOptions>(raw) else {
+        return json_string(json!({"ok": false, "error": "invalid sync options"}));
+    };
+
+    match mark_timeline_entry_synced(&options) {
+        Ok(entries) => json_string(json!({"ok": true, "entries": entries})),
+        Err(err) => json_string(json!({"ok": false, "error": err})),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hermes_growth_timeline_clear(
+    options_ptr: *const u8,
+    options_len: usize,
+) -> *mut c_char {
+    let Some(raw) = (unsafe { read_utf8(options_ptr, options_len) }) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(options) = serde_json::from_str::<TimelineOptions>(raw) else {
+        return json_string(json!({"ok": false, "error": "invalid timeline options"}));
+    };
+
+    match write_timeline(
+        &options.timeline_path,
+        &TimelineStore {
+            version: 1,
+            entries: Vec::new(),
+        },
+    ) {
+        Ok(()) => json_string(json!({"ok": true, "entries": []})),
+        Err(err) => json_string(json!({"ok": false, "error": err})),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PeriodicReviewOptions {
+    activity_db_path: String,
+    timeline_path: String,
+    period: String,
+    date: String,
+    start_timestamp: f64,
+    end_timestamp: f64,
+    max_questions: Option<usize>,
+    max_intents: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TimelineOptions {
+    timeline_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TimelineSyncOptions {
+    timeline_path: String,
+    entry_id: String,
+    conclusion_id: Option<String>,
+    synced_at: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TimelineEntry {
+    id: String,
+    period: String,
+    date: String,
+    title: String,
+    review: String,
+    sync_summary: String,
+    created_at: f64,
+    synced_at: Option<f64>,
+    honcho_conclusion_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TimelineStore {
+    version: u32,
+    entries: Vec<TimelineEntry>,
+}
+
+fn build_periodic_review_prompt(options: &PeriodicReviewOptions) -> Result<Value, String> {
+    let conn = Connection::open_with_flags(
+        &options.activity_db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+        .map_err(|err| format!("open activity sqlite failed: {}", err))?;
+    let stats = query_review_stats(&conn, options)?;
+    let questions = query_review_questions(&conn, options)?;
+    let intents = query_review_intents(&conn, options)?;
+
+    if stats.is_empty() && questions.is_empty() && intents.is_empty() {
+        return Ok(json!({
+            "ok": true,
+            "hasData": false,
+            "entryID": entry_id(options),
+            "prompt": "",
+            "activitySummary": {
+                "stats": stats,
+                "questions": questions,
+                "intents": intents
+            }
+        }));
+    }
+
+    let prompt = build_review_prompt_text(options, &stats, &questions, &intents);
+    Ok(json!({
+        "ok": true,
+        "hasData": true,
+        "entryID": entry_id(options),
+        "date": options.date,
+        "period": options.period,
+        "prompt": prompt,
+        "activitySummary": {
+            "stats": stats,
+            "questions": questions,
+            "intents": intents
+        }
+    }))
+}
+
+fn query_review_stats(conn: &Connection, options: &PeriodicReviewOptions) -> Result<Vec<Value>, String> {
+    let mut stats = Vec::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT app_name, total_seconds, session_count, keyboard_events, mouse_clicks
+             FROM app_usage_stats
+             WHERE date = ?
+             ORDER BY total_seconds DESC
+             LIMIT 8",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![&options.date], |row| {
+            Ok(json!({
+                "appName": row.get::<_, String>(0).unwrap_or_default(),
+                "totalSeconds": row.get::<_, i64>(1).unwrap_or(0),
+                "sessionCount": row.get::<_, i64>(2).unwrap_or(0),
+                "keyboardEvents": row.get::<_, i64>(3).unwrap_or(0),
+                "mouseClicks": row.get::<_, i64>(4).unwrap_or(0)
+            }))
+        })
+        .map_err(|err| err.to_string())?;
+    for row in rows {
+        if let Ok(value) = row {
+            stats.push(value);
+        }
+    }
+    if !stats.is_empty() {
+        return Ok(stats);
+    }
+
+    let mut fallback = conn
+        .prepare(
+            "SELECT app_name,
+                    SUM(duration_seconds) AS total_seconds,
+                    COUNT(*) AS session_count,
+                    SUM(keyboard_events) AS keyboard_events,
+                    SUM(mouse_clicks) AS mouse_clicks
+             FROM activity_sessions
+             WHERE start_time >= ? AND start_time < ? AND is_excluded = 0
+             GROUP BY app_bundle_id, app_name
+             ORDER BY total_seconds DESC
+             LIMIT 8",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = fallback
+        .query_map(params![options.start_timestamp, options.end_timestamp], |row| {
+            Ok(json!({
+                "appName": row.get::<_, String>(0).unwrap_or_default(),
+                "totalSeconds": row.get::<_, i64>(1).unwrap_or(0),
+                "sessionCount": row.get::<_, i64>(2).unwrap_or(0),
+                "keyboardEvents": row.get::<_, i64>(3).unwrap_or(0),
+                "mouseClicks": row.get::<_, i64>(4).unwrap_or(0)
+            }))
+        })
+        .map_err(|err| err.to_string())?;
+    for row in rows {
+        if let Ok(value) = row {
+            stats.push(value);
+        }
+    }
+    Ok(stats)
+}
+
+fn query_review_questions(conn: &Connection, options: &PeriodicReviewOptions) -> Result<Vec<Value>, String> {
+    let limit = options.max_questions.unwrap_or(20).min(50) as i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT mode, content, timestamp, has_images, has_documents
+             FROM user_questions
+             WHERE timestamp >= ? AND timestamp < ?
+             ORDER BY timestamp DESC
+             LIMIT ?",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![options.start_timestamp, options.end_timestamp, limit], |row| {
+            let content: String = row.get(1).unwrap_or_default();
+            Ok(json!({
+                "mode": row.get::<_, String>(0).unwrap_or_default(),
+                "content": truncate_chars(&content.replace('\n', " "), 180),
+                "timestamp": row.get::<_, f64>(2).unwrap_or(0.0),
+                "hasImages": row.get::<_, i64>(3).unwrap_or(0) != 0,
+                "hasDocuments": row.get::<_, i64>(4).unwrap_or(0) != 0
+            }))
+        })
+        .map_err(|err| err.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        if let Ok(value) = row {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
+fn query_review_intents(conn: &Connection, options: &PeriodicReviewOptions) -> Result<Vec<Value>, String> {
+    let limit = options.max_intents.unwrap_or(20).min(60) as i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT trigger_type, app_name, window_title, ocr_text, is_blacklisted, timestamp
+             FROM user_intents
+             WHERE timestamp >= ? AND timestamp < ?
+             ORDER BY timestamp DESC
+             LIMIT ?",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(params![options.start_timestamp, options.end_timestamp, limit], |row| {
+            let ocr: Option<String> = row.get(3).ok();
+            Ok(json!({
+                "trigger": row.get::<_, String>(0).unwrap_or_default(),
+                "appName": row.get::<_, Option<String>>(1).ok().flatten().unwrap_or_default(),
+                "windowTitle": row.get::<_, Option<String>>(2).ok().flatten().unwrap_or_default(),
+                "text": ocr.map(|s| truncate_chars(&s.replace('\n', " "), 160)).unwrap_or_default(),
+                "isBlacklisted": row.get::<_, i64>(4).unwrap_or(0) != 0,
+                "timestamp": row.get::<_, f64>(5).unwrap_or(0.0)
+            }))
+        })
+        .map_err(|err| err.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        if let Ok(value) = row {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
+fn build_review_prompt_text(
+    options: &PeriodicReviewOptions,
+    stats: &[Value],
+    questions: &[Value],
+    intents: &[Value],
+) -> String {
+    let mut lines = Vec::new();
+    lines.push("# 任务".to_string());
+    lines.push("你是 Jason hermes 的周期回顾引擎。基于本地活动数据，生成一条可以保存到「成长时间线」的回顾。".to_string());
+    lines.push("目标不是流水账，而是提炼用户长期习惯、关注主题、重复阻塞点和下一步建议。".to_string());
+    lines.push(String::new());
+    lines.push("## 输出要求".to_string());
+    lines.push("- 使用简体中文，第二人称「你」。".to_string());
+    lines.push("- Markdown 格式，长度 500-900 字。".to_string());
+    lines.push("- 不要暴露完整窗口标题、OCR 原文或隐私流水，只提炼主题。".to_string());
+    lines.push("- 必须包含这些小节：`## 这段时间的主线`、`## 观察到的模式`、`## 可以继续推进的事`、`## 可同步到 Hermes 的精选摘要`。".to_string());
+    lines.push("- `可同步到 Hermes 的精选摘要` 只写 3-5 条长期可复用结论；不要写临时 app 切换、一次性状态、未经验证猜测。".to_string());
+    lines.push(String::new());
+    lines.push("## 周期".to_string());
+    lines.push(format!("- 类型：{}", options.period));
+    lines.push(format!("- 日期：{}", options.date));
+    lines.push(String::new());
+
+    if !stats.is_empty() {
+        lines.push("## App 使用概览".to_string());
+        for item in stats.iter().take(8) {
+            let app = item.get("appName").and_then(Value::as_str).unwrap_or("");
+            let seconds = item.get("totalSeconds").and_then(Value::as_i64).unwrap_or(0);
+            let sessions = item.get("sessionCount").and_then(Value::as_i64).unwrap_or(0);
+            let keys = item.get("keyboardEvents").and_then(Value::as_i64).unwrap_or(0);
+            lines.push(format!(
+                "- {}：{}，{} 次会话，{} 次按键",
+                app,
+                format_seconds(seconds),
+                sessions,
+                keys
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if !questions.is_empty() {
+        lines.push("## 用户对 AI 提过的问题".to_string());
+        for item in questions.iter().take(20) {
+            let mode = item.get("mode").and_then(Value::as_str).unwrap_or("");
+            let content = item.get("content").and_then(Value::as_str).unwrap_or("");
+            lines.push(format!("- [{}] {}", mode, content));
+        }
+        lines.push(String::new());
+    }
+
+    if !intents.is_empty() {
+        lines.push("## 本地意图采样摘要".to_string());
+        for item in intents.iter().take(20) {
+            if item.get("isBlacklisted").and_then(Value::as_bool).unwrap_or(false) {
+                continue;
+            }
+            let app = item.get("appName").and_then(Value::as_str).unwrap_or("");
+            let title = item.get("windowTitle").and_then(Value::as_str).unwrap_or("");
+            let text = item.get("text").and_then(Value::as_str).unwrap_or("");
+            if text.is_empty() && title.is_empty() {
+                lines.push(format!("- {}", app));
+            } else {
+                lines.push(format!("- {} / {} / {}", app, title, text));
+            }
+        }
+        lines.push(String::new());
+    }
+
+    lines.push("---".to_string());
+    lines.push("现在直接输出回顾正文，不要解释数据来源，不要说你无法访问更多信息。".to_string());
+    lines.join("\n")
+}
+
+fn save_timeline_entry(
+    options: &PeriodicReviewOptions,
+    review_text: &str,
+) -> Result<(TimelineEntry, Vec<TimelineEntry>), String> {
+    let mut store = load_timeline(&options.timeline_path)?;
+    let now = current_unix_timestamp();
+    let entry = TimelineEntry {
+        id: entry_id(options),
+        period: options.period.clone(),
+        date: options.date.clone(),
+        title: format!("{} 周期回顾", options.date),
+        review: review_text.trim().to_string(),
+        sync_summary: build_sync_summary(&options.date, review_text),
+        created_at: now,
+        synced_at: None,
+        honcho_conclusion_id: None,
+    };
+
+    store.entries.retain(|item| item.id != entry.id);
+    store.entries.insert(0, entry.clone());
+    store
+        .entries
+        .sort_by(|a, b| b.created_at.partial_cmp(&a.created_at).unwrap_or(std::cmp::Ordering::Equal));
+    write_timeline(&options.timeline_path, &store)?;
+    Ok((entry, store.entries))
+}
+
+fn mark_timeline_entry_synced(options: &TimelineSyncOptions) -> Result<Vec<TimelineEntry>, String> {
+    let mut store = load_timeline(&options.timeline_path)?;
+    let mut found = false;
+    for entry in &mut store.entries {
+        if entry.id == options.entry_id {
+            entry.synced_at = Some(options.synced_at);
+            entry.honcho_conclusion_id = options.conclusion_id.clone();
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        return Err("timeline entry not found".to_string());
+    }
+    write_timeline(&options.timeline_path, &store)?;
+    Ok(store.entries)
+}
+
+fn load_timeline(path: &str) -> Result<TimelineStore, String> {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Ok(TimelineStore {
+            version: 1,
+            entries: Vec::new(),
+        });
+    }
+    let raw = fs::read_to_string(&path).map_err(|err| format!("read timeline failed: {}", err))?;
+    if raw.trim().is_empty() {
+        return Ok(TimelineStore {
+            version: 1,
+            entries: Vec::new(),
+        });
+    }
+    serde_json::from_str::<TimelineStore>(&raw).map_err(|err| format!("parse timeline failed: {}", err))
+}
+
+fn write_timeline(path: &str, store: &TimelineStore) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| format!("create timeline dir failed: {}", err))?;
+    }
+    let raw = serde_json::to_vec_pretty(store).map_err(|err| err.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, raw).map_err(|err| format!("write timeline temp failed: {}", err))?;
+    fs::rename(&tmp, &path).map_err(|err| format!("replace timeline failed: {}", err))?;
+    Ok(())
+}
+
+fn build_sync_summary(date: &str, review_text: &str) -> String {
+    let section = extract_sync_section(review_text);
+    let body = if section.trim().is_empty() {
+        truncate_chars(review_text.trim(), 900)
+    } else {
+        section
+    };
+    format!(
+        "source=jason-hermes-periodic-review date={}\n{}",
+        date,
+        body.trim()
+    )
+}
+
+fn extract_sync_section(review_text: &str) -> String {
+    let mut capture = false;
+    let mut lines = Vec::new();
+    for line in review_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') && (trimmed.contains("精选摘要") || trimmed.contains("同步到 Hermes")) {
+            capture = true;
+            continue;
+        }
+        if capture && trimmed.starts_with('#') {
+            break;
+        }
+        if capture {
+            lines.push(line.to_string());
+        }
+    }
+    lines.join("\n").trim().to_string()
+}
+
+fn entry_id(options: &PeriodicReviewOptions) -> String {
+    format!("{}-{}", sanitize_file_stem(&options.period), sanitize_file_stem(&options.date))
+}
+
+fn current_unix_timestamp() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+fn format_seconds(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    let h = seconds / 3600;
+    let m = (seconds % 3600) / 60;
+    if h > 0 {
+        format!("{}h{}m", h, m)
+    } else {
+        format!("{}m", m)
+    }
+}
+
 unsafe fn read_utf8<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     if ptr.is_null() {
         return None;
@@ -685,5 +1209,50 @@ mod tests {
             parse_listening_port("opencode server listening on http://127.0.0.1:14098"),
             Some(14098)
         );
+    }
+
+    #[test]
+    fn extracts_growth_timeline_sync_section() {
+        let review = r#"
+## 这段时间的主线
+你主要在修 HermesPet。
+
+## 可同步到 Hermes 的精选摘要
+- 用户希望 Jason hermes 的周期回顾默认只写本地时间线。
+- 只有用户手动点击同步时，才把精选摘要写入 Hermes/Honcho。
+
+## 其他
+不要同步这里。
+"#;
+        let summary = extract_sync_section(review);
+        assert!(summary.contains("默认只写本地时间线"));
+        assert!(!summary.contains("不要同步这里"));
+    }
+
+    #[test]
+    fn saves_growth_timeline_entry() {
+        let path = std::env::temp_dir().join(format!(
+            "hermes-growth-timeline-test-{}.json",
+            current_unix_timestamp()
+        ));
+        let options = PeriodicReviewOptions {
+            activity_db_path: "/tmp/not-used.sqlite".to_string(),
+            timeline_path: path.to_string_lossy().to_string(),
+            period: "daily".to_string(),
+            date: "2026-05-23".to_string(),
+            start_timestamp: 0.0,
+            end_timestamp: 1.0,
+            max_questions: None,
+            max_intents: None,
+        };
+        let (entry, entries) = save_timeline_entry(
+            &options,
+            "## 可同步到 Hermes 的精选摘要\n- 保留分层同步。",
+        )
+        .unwrap();
+        assert_eq!(entry.id, "daily-2026-05-23");
+        assert_eq!(entries.len(), 1);
+        assert!(entry.sync_summary.contains("source=jason-hermes-periodic-review"));
+        let _ = std::fs::remove_file(path);
     }
 }

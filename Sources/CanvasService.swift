@@ -175,10 +175,9 @@ final class CanvasService {
 
     /// 串行生成所有 pending 的图片元素 —— 一次一个 codex 进程，挨个完成。
     ///
-    /// **为什么不并发**（曾经踩过的坑）：CodexClient 是单例，内部 `_pendingImages`
-    /// 数组共享；codex 生成图都写到固定目录 `~/.codex/generated_images/`。多个进程
-    /// 并发跑时，A 进程结束扫目录会把 B/C 进程的图也算进自己的成果，takeGeneratedImages
-    /// 又把全部图一次性取走，导致后续 element 拿到错位 / 重复的图（实测 5 张图重复 2 张）。
+    /// **为什么不并发**（曾经踩过的坑）：codex 生成图都写到固定目录
+    /// `~/.codex/generated_images/`。多个进程并发跑时，A 进程结束扫目录可能把
+    /// B/C 进程的图也算进自己的成果，导致后续 element 拿到错位 / 重复的图。
     /// 同时 4 个进程并发 post 灵动岛通知，stepStarted/stepEnded 计数错乱、elapsedTask
     /// timer 一直在跑导致灵动岛卡住。
     ///
@@ -260,13 +259,14 @@ final class CanvasService {
             // 不让 codex 的 ToolStarted/Ended 通知去触发灵动岛状态机
             let stream = codexClient.streamCompletion(
                 messages: [userMessage],
+                conversationID: "\(canvasID)-\(element.id)",
                 suppressIslandUpdates: true
             )
             for try await _ in stream {
                 // codex 的文本输出我们不关心，只关心生成的图
             }
-            // 取出 codex 这一轮生成的图（CodexClient 内部缓存的 _pendingImages）
-            let generated = codexClient.takeGeneratedImages()
+            // 取出 codex 这一轮生成的图（按画布元素隔离缓存）
+            let generated = codexClient.takeGeneratedImages(conversationID: "\(canvasID)-\(element.id)")
             guard let first = generated.first else {
                 update(element.id) {
                     $0.status = .failed

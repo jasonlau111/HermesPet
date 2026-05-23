@@ -1214,67 +1214,31 @@ struct DynamicIslandPillView: View {
 
 // MARK: - idle 极简圆点（左耳）
 
-/// idle 形态时左耳的极简圆点 —— 12pt mode 主色 + 4s 周期呼吸（alpha 0.6→0.85→0.6）。
-/// 比 14pt sprite 更克制，让"什么都没事"的视觉信号尽可能轻。
+/// idle 形态时左耳的极简圆点 —— 12pt mode 主色，静态显示。
+/// 这里刻意不做永久呼吸动画：一个小圆点的 repeatForever 会让整个灵动岛 SwiftUI display list 空转重绘。
 /// hover 时由 hoverCard 接管，露出 22pt 完整 mode sprite。
 ///
-/// 5 分钟系统无活动时 → sleeping 态：圆点 dim + 缩小 + 飘 "z"（打哈欠）。
+/// 5 分钟系统无活动时 → sleeping 态：圆点 dim + 缩小。
 /// 状态来源 `IdleStateTracker`，通知名 `HermesPetUserIdleChanged`
 struct IdleModeDot: View {
     let tint: Color
-    @State private var breathe = false
     @State private var isSleeping = false
-    /// 全局「桌宠动效」开关。quietMode=true 时圆点保持固定 opacity，不再 2s 周期呼吸
-    @AppStorage("quietMode") private var quietMode: Bool = false
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Circle()
-                .fill(tint)
-                .frame(width: 12, height: 12)
-                .opacity(isSleeping
-                         ? (breathe ? 0.40 : 0.25)
-                         : (breathe ? 0.85 : 0.60))
-                .shadow(color: tint.opacity(isSleeping ? 0.20 : 0.45), radius: 4)
-                .scaleEffect(isSleeping ? 0.82 : 1.0)
-
-            if isSleeping {
-                FloatingSleepZ(tint: tint)
-                    .offset(x: 10, y: -6)
-                    .transition(.opacity.combined(with: .scale(scale: 0.6)))
-            }
-        }
+        Circle()
+            .fill(tint)
+            .frame(width: 12, height: 12)
+            .opacity(isSleeping ? 0.28 : 0.72)
+            .shadow(color: tint.opacity(isSleeping ? 0.18 : 0.38), radius: 3)
+            .scaleEffect(isSleeping ? 0.82 : 1.0)
         .animation(AnimTok.smooth, value: isSleeping)
         .onAppear {
             // 进入 view 时立即同步一次状态（之前已经 idle 5min 的话直接显示 sleeping）
             isSleeping = IdleStateTracker.shared.isSleeping
-            // quietMode=true 时不启动呼吸 —— breathe 保持 false，圆点固定中等亮度
-            guard !quietMode else { return }
-            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
-                breathe = true
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("HermesPetUserIdleChanged"))) { note in
             isSleeping = (note.userInfo?["isSleeping"] as? Bool) ?? false
         }
-    }
-}
-
-/// 飘 "z" 子动画 —— 上浮 + 淡出循环（每 2.4s 一个 z 从下往上飘）
-struct FloatingSleepZ: View {
-    let tint: Color
-    @State private var phase: CGFloat = 0   // 0 → 1，控制位置与透明度
-
-    var body: some View {
-        Text("z")
-            .font(.system(size: 8, weight: .bold, design: .rounded))
-            .foregroundStyle(tint.opacity(0.7 - Double(phase) * 0.7))
-            .offset(y: -CGFloat(phase) * 10)
-            .onAppear {
-                withAnimation(.linear(duration: 2.4).repeatForever(autoreverses: false)) {
-                    phase = 1.0
-                }
-            }
     }
 }
 

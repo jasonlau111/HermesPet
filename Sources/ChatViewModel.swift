@@ -5,10 +5,10 @@ import ServiceManagement
 @MainActor
 @Observable
 final class ChatViewModel {
-    private static let completeThinkBlockRegex = try! NSRegularExpression(
+    nonisolated private static let completeThinkBlockRegex = try! NSRegularExpression(
         pattern: #"(?is)<think\b[^>]*>.*?</think\s*>"#
     )
-    private static let trailingThinkBlockRegex = try! NSRegularExpression(
+    nonisolated private static let trailingThinkBlockRegex = try! NSRegularExpression(
         pattern: #"(?is)<think\b[^>]*>.*\z"#
     )
 
@@ -267,6 +267,11 @@ final class ChatViewModel {
     var morningBriefingBackend: AgentMode {
         didSet { UserDefaults.standard.set(morningBriefingBackend.rawValue, forKey: "morningBriefingBackend") }
     }
+    /// 周期回顾 / 成长时间线由哪个 AI 后端生成。
+    /// 回顾只在本地 timeline 落盘，用户手动同步时才写入 Hermes/Honcho。
+    var periodicReviewBackend: AgentMode {
+        didSet { UserDefaults.standard.set(periodicReviewBackend.rawValue, forKey: "periodicReviewBackend") }
+    }
     /// 权限审批 UI 开关 —— v1.3 新增。
     /// 关（默认）：directAPI 工具全 allow + Claude/Codex 的 ~/.claude/settings.json hook 撤销
     /// 开：directAPI 走 ask + Claude/Codex 注入 hook → 工具调用前灵动岛弹卡片让用户决策
@@ -386,6 +391,8 @@ final class ChatViewModel {
         // 早报后端默认 Hermes（自托管/隐私零风险），用户可改
         let savedBriefing = UserDefaults.standard.string(forKey: "morningBriefingBackend")
         self.morningBriefingBackend = AgentMode(rawValue: savedBriefing ?? "") ?? .hermes
+        let savedPeriodicReview = UserDefaults.standard.string(forKey: "periodicReviewBackend")
+        self.periodicReviewBackend = AgentMode(rawValue: savedPeriodicReview ?? "") ?? .hermes
 
         // 加载持久化的对话列表（兼容旧版 session.json，自动迁移）
         var loaded = storage.loadConversations()
@@ -395,7 +402,7 @@ final class ChatViewModel {
                 title: "新对话",
                 messages: [ChatMessage(
                     role: .assistant,
-                    content: "👋 你好！我是你的 Hermes 桌宠，随时找我聊天或干活～\n点击 ⚙️ 配置好 API 地址和密钥就能用了。"
+                    content: "👋 你好！我是 Jason hermes，随时找我聊天或干活～\n点击 ⚙️ 配置好 API 地址和密钥就能用了。"
                 )],
                 mode: self.lastUsedMode
             )]
@@ -995,7 +1002,13 @@ final class ChatViewModel {
             msg.isStreaming = true
         }
 
-        let task = Task {
+        let apiClient = self.apiClient
+        let openClawClient = self.openClawClient
+        let claudeClient = self.claudeClient
+        let codexClient = self.codexClient
+        let storage = self.storage
+
+        let task = Task.detached(priority: .userInitiated) { [weak self, apiClient, openClawClient, claudeClient, codexClient, storage] in
             var didSucceed = false
             do {
                 let stream: AsyncThrowingStream<String, Error>
@@ -1032,118 +1045,136 @@ final class ChatViewModel {
 
                 var fullContent = ""
                 var lastUpdate = Date.distantPast
-                // 流式刷新节流：80ms 一次（约 12.5fps）。
-                // 聊天页流式期间走轻量 Text，结束后才做完整 Markdown 渲染；这里优先减少
-                // @Observable 消息数组写入次数，避免每个 token 都让整条消息重新 diff/layout。
-                let throttle: TimeInterval = 0.080
+                // 流式刷新节流：150ms 一次（约 6.7fps）。
+                // Task.detached 负责后台读取/拼接 token，只有可见内容更新才切回主线程；
+                // 避免长回复把 @MainActor 的 SwiftUI 布局和输入响应挤到同一条队列里。
+                let throttle: TimeInterval = 0.150
 
                 for try await delta in stream {
                     try Task.checkCancellation()
                     fullContent += delta
-                    let visibleContent = Self.sanitizeAssistantVisibleContent(fullContent)
                     let now = Date()
                     if now.timeIntervalSince(lastUpdate) >= throttle {
-                        self.updateMessage(conversationID: targetConversationID, messageID: assistantMessageID) { msg in
-                            msg.content = visibleContent
+                        let visibleContent = Self.sanitizeAssistantVisibleContent(fullContent)
+                        await MainActor.run { [weak self] in
+                            self?.updateMessage(conversationID: targetConversationID, messageID: assistantMessageID) { msg in
+                                msg.content = visibleContent
+                            }
                         }
                         lastUpdate = now
                     }
                 }
                 // 流结束时一定要把最后剩余的内容刷出去
                 // Codex 模式还要把它生成的图片附加到这条 assistant 消息上
-                let generatedImages: [Data] = (mode == .codex) ? codexClient.takeGeneratedImages() : []
+                let generatedImages: [Data] = (mode == .codex)
+                    ? codexClient.takeGeneratedImages(conversationID: targetConversationID)
+                    : []
                 // 图片落盘：写到 ~/.hermespet/images/，message 同时持 Data（显示用）+ path（持久化用）
                 let imagePaths: [String] = generatedImages.isEmpty
                     ? []
                     : storage.persistImages(generatedImages, forMessage: assistantMessageID)
                 let visibleContent = Self.sanitizeAssistantVisibleContent(fullContent)
-                self.updateMessage(conversationID: targetConversationID, messageID: assistantMessageID) { msg in
-                    msg.content = visibleContent.isEmpty ? "(没有响应)" : visibleContent
-                    msg.isStreaming = false
-                    if !generatedImages.isEmpty {
-                        msg.images = generatedImages
-                        msg.imagePaths = imagePaths
+                await MainActor.run { [weak self] in
+                    self?.updateMessage(conversationID: targetConversationID, messageID: assistantMessageID) { msg in
+                        msg.content = visibleContent.isEmpty ? "(没有响应)" : visibleContent
+                        msg.isStreaming = false
+                        if !generatedImages.isEmpty {
+                            msg.images = generatedImages
+                            msg.imagePaths = imagePaths
+                        }
                     }
                 }
                 didSucceed = !visibleContent.isEmpty || !generatedImages.isEmpty
                 if didSucceed, !visibleContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    TTSPlaybackController.shared.autoPlayIfEnabled(
-                        messageID: assistantMessageID,
-                        content: visibleContent
-                    )
+                    await MainActor.run {
+                        TTSPlaybackController.shared.autoPlayIfEnabled(
+                            messageID: assistantMessageID,
+                            content: visibleContent
+                        )
+                    }
                 }
 
                 // 灵动岛下方选项菜单 ChoiceMenuOverlay 已废弃 —— 跟聊天窗内 ChoiceCard 信息重复，
                 // 用户决定只保留聊天窗里的 ChoiceCard。不再 post HermesPetChoiceListReady。
                 // ChoiceMenuOverlay 渲染代码暂保留作 dead code，没人 trigger 永不弹出。
             } catch is CancellationError {
-                self.updateMessage(conversationID: targetConversationID, messageID: assistantMessageID) { msg in
-                    msg.isStreaming = false
-                    if msg.content.isEmpty {
-                        msg.content = "(已取消)"
-                    } else {
-                        msg.content += "\n\n_(已取消)_"
+                await MainActor.run { [weak self] in
+                    self?.updateMessage(conversationID: targetConversationID, messageID: assistantMessageID) { msg in
+                        msg.isStreaming = false
+                        if msg.content.isEmpty {
+                            msg.content = "(已取消)"
+                        } else {
+                            msg.content += "\n\n_(已取消)_"
+                        }
                     }
                 }
             } catch {
-                let friendly = self.friendlyError(error)
-                self.updateMessage(conversationID: targetConversationID, messageID: assistantMessageID) { msg in
-                    msg.isStreaming = false
-                    msg.content = "❌ \(friendly)"
+                let friendly = await MainActor.run { [weak self] in
+                    self?.friendlyError(error) ?? error.localizedDescription
                 }
-                self.errorMessage = friendly
-                // directAPI 模式 + 撞错 → 云朵冒一句可操作 hint，让用户知道接下来怎么办
-                if mode == .directAPI {
-                    let petHint = Self.petHintForError(friendly)
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.updateMessage(conversationID: targetConversationID, messageID: assistantMessageID) { msg in
+                        msg.isStreaming = false
+                        msg.content = "❌ \(friendly)"
+                    }
+                    self.errorMessage = friendly
+                    // directAPI 模式 + 撞错 → 云朵冒一句可操作 hint，让用户知道接下来怎么办
+                    if mode == .directAPI {
+                        let petHint = Self.petHintForError(friendly)
+                        NotificationCenter.default.post(
+                            name: .init("HermesPetClawdBubble"),
+                            object: nil,
+                            userInfo: ["text": petHint, "duration": 2.8]
+                        )
+                    }
+                }
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                // 清理：目标对话 isStreaming → false；task 从字典里移除
+                if let idx = self.conversations.firstIndex(where: { $0.id == targetConversationID }) {
+                    self.conversations[idx].isStreaming = false
+                    // 后台对话完成 → 标记未读（如果用户在等待期间切走了）
+                    if didSucceed, targetConversationID != self.activeConversationID {
+                        self.conversations[idx].hasUnread = true
+                    }
+                }
+                self.tasksByConversation[targetConversationID] = nil
+
+                storage.saveConversations(self.conversations)
+                // 通知灵动岛右耳：成功 → 播放对勾动画；失败/取消 → 静默回 idle
+                NotificationCenter.default.post(
+                    name: .init("HermesPetTaskFinished"),
+                    object: nil,
+                    userInfo: ["success": didSucceed]
+                )
+                // 任务成功 + 聊天窗关着 → 触发"AI 回复摘要"卡片（v1.2.7-dev）
+                // 解决 ⌘⇧V 语音 / ⌘⇧Space quickAsk 这类场景"看不到回复"的痛点
+                if didSucceed,
+                   ChatWindowController.shared?.isVisible != true,
+                   let idx = self.conversations.firstIndex(where: { $0.id == targetConversationID }),
+                   let lastAssistant = self.conversations[idx].messages.last(where: { $0.role == .assistant }),
+                   !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !lastAssistant.content.hasPrefix("❌") {
                     NotificationCenter.default.post(
-                        name: .init("HermesPetClawdBubble"),
+                        name: .init("HermesPetResponseReady"),
                         object: nil,
-                        userInfo: ["text": petHint, "duration": 2.8]
+                        userInfo: [
+                            "content": lastAssistant.content,
+                            "conversationID": targetConversationID,
+                            "modeRaw": mode.rawValue
+                        ]
                     )
                 }
-            }
-            // 清理：目标对话 isStreaming → false；task 从字典里移除
-            if let idx = self.conversations.firstIndex(where: { $0.id == targetConversationID }) {
-                self.conversations[idx].isStreaming = false
-                // 后台对话完成 → 标记未读（如果用户在等待期间切走了）
-                if didSucceed, targetConversationID != self.activeConversationID {
-                    self.conversations[idx].hasUnread = true
+                // 任务成功完成 → 给个轻触觉提示（不打扰，只是"做完了"的回执感）
+                if didSucceed {
+                    Haptic.tap(.alignment)
                 }
+                self.broadcastBackgroundStreamingCount()
+                // 当前 task 结束 → 检查排队队列，dequeue 下一个
+                self.dequeueNextStreamIfAny()
             }
-            self.tasksByConversation[targetConversationID] = nil
-
-            self.storage.saveConversations(self.conversations)
-            // 通知灵动岛右耳：成功 → 播放对勾动画；失败/取消 → 静默回 idle
-            NotificationCenter.default.post(
-                name: .init("HermesPetTaskFinished"),
-                object: nil,
-                userInfo: ["success": didSucceed]
-            )
-            // 任务成功 + 聊天窗关着 → 触发"AI 回复摘要"卡片（v1.2.7-dev）
-            // 解决 ⌘⇧V 语音 / ⌘⇧Space quickAsk 这类场景"看不到回复"的痛点
-            if didSucceed,
-               ChatWindowController.shared?.isVisible != true,
-               let idx = self.conversations.firstIndex(where: { $0.id == targetConversationID }),
-               let lastAssistant = self.conversations[idx].messages.last(where: { $0.role == .assistant }),
-               !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               !lastAssistant.content.hasPrefix("❌") {
-                NotificationCenter.default.post(
-                    name: .init("HermesPetResponseReady"),
-                    object: nil,
-                    userInfo: [
-                        "content": lastAssistant.content,
-                        "conversationID": targetConversationID,
-                        "modeRaw": mode.rawValue
-                    ]
-                )
-            }
-            // 任务成功完成 → 给个轻触觉提示（不打扰，只是"做完了"的回执感）
-            if didSucceed {
-                Haptic.tap(.alignment)
-            }
-            self.broadcastBackgroundStreamingCount()
-            // 当前 task 结束 → 检查排队队列，dequeue 下一个
-            self.dequeueNextStreamIfAny()
         }
         // 把 task 存进字典 —— 每个对话独立，cancel 只取消当前 active 对话的
         tasksByConversation[targetConversationID] = task
@@ -1240,7 +1271,7 @@ final class ChatViewModel {
 
     /// 模型返回里的 `<think>...</think>` 是推理草稿，不应该进聊天气泡。
     /// 同时处理流式中尚未闭合的 `<think>`，避免先闪出思考过程再被最终答案替换。
-    static func sanitizeAssistantVisibleContent(_ content: String) -> String {
+    nonisolated static func sanitizeAssistantVisibleContent(_ content: String) -> String {
         guard content.range(of: "<think", options: [.caseInsensitive]) != nil else {
             return content
         }

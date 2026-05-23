@@ -38,6 +38,11 @@ final class HermesRustCore: @unchecked Sendable {
     private let normalizePermissionPayload: OneBufferFn?
     private let parseOpenCodeListeningPort: OneBufferFn?
     private let parseOpenCodeHealthJSON: OneBufferFn?
+    private let periodicReviewPrepareFn: OneBufferFn?
+    private let growthTimelineLoadFn: OneBufferFn?
+    private let growthTimelineSaveFn: TwoBufferFn?
+    private let growthTimelineMarkSyncedFn: OneBufferFn?
+    private let growthTimelineClearFn: OneBufferFn?
     private let freeString: FreeStringFn?
 
     var isAvailable: Bool {
@@ -99,6 +104,31 @@ final class HermesRustCore: @unchecked Sendable {
                 name: "hermes_parse_opencode_health_json",
                 as: OneBufferFn.self
             )
+            self.periodicReviewPrepareFn = Self.loadSymbol(
+                loaded,
+                name: "hermes_periodic_review_prepare",
+                as: OneBufferFn.self
+            )
+            self.growthTimelineLoadFn = Self.loadSymbol(
+                loaded,
+                name: "hermes_growth_timeline_load",
+                as: OneBufferFn.self
+            )
+            self.growthTimelineSaveFn = Self.loadSymbol(
+                loaded,
+                name: "hermes_growth_timeline_save",
+                as: TwoBufferFn.self
+            )
+            self.growthTimelineMarkSyncedFn = Self.loadSymbol(
+                loaded,
+                name: "hermes_growth_timeline_mark_synced",
+                as: OneBufferFn.self
+            )
+            self.growthTimelineClearFn = Self.loadSymbol(
+                loaded,
+                name: "hermes_growth_timeline_clear",
+                as: OneBufferFn.self
+            )
             self.freeString = Self.loadSymbol(
                 loaded,
                 name: "hermes_rust_free_string",
@@ -114,6 +144,11 @@ final class HermesRustCore: @unchecked Sendable {
             self.normalizePermissionPayload = nil
             self.parseOpenCodeListeningPort = nil
             self.parseOpenCodeHealthJSON = nil
+            self.periodicReviewPrepareFn = nil
+            self.growthTimelineLoadFn = nil
+            self.growthTimelineSaveFn = nil
+            self.growthTimelineMarkSyncedFn = nil
+            self.growthTimelineClearFn = nil
             self.freeString = nil
         }
     }
@@ -254,6 +289,46 @@ final class HermesRustCore: @unchecked Sendable {
         return object["healthy"] as? Bool
     }
 
+    func preparePeriodicReview(options: [String: Any]) -> [String: Any]? {
+        guard let periodicReviewPrepareFn,
+              let raw = Self.encodeJSONObject(options) else {
+            return nil
+        }
+        return callJSON(periodicReviewPrepareFn, raw)
+    }
+
+    func loadGrowthTimeline(options: [String: Any]) -> [String: Any]? {
+        guard let growthTimelineLoadFn,
+              let raw = Self.encodeJSONObject(options) else {
+            return nil
+        }
+        return callJSON(growthTimelineLoadFn, raw)
+    }
+
+    func saveGrowthTimelineEntry(options: [String: Any], review: String) -> [String: Any]? {
+        guard let growthTimelineSaveFn,
+              let raw = Self.encodeJSONObject(options) else {
+            return nil
+        }
+        return callJSON(growthTimelineSaveFn, raw, review)
+    }
+
+    func markGrowthTimelineSynced(options: [String: Any]) -> [String: Any]? {
+        guard let growthTimelineMarkSyncedFn,
+              let raw = Self.encodeJSONObject(options) else {
+            return nil
+        }
+        return callJSON(growthTimelineMarkSyncedFn, raw)
+    }
+
+    func clearGrowthTimeline(options: [String: Any]) -> [String: Any]? {
+        guard let growthTimelineClearFn,
+              let raw = Self.encodeJSONObject(options) else {
+            return nil
+        }
+        return callJSON(growthTimelineClearFn, raw)
+    }
+
     private static func loadSymbol<T>(
         _ handle: UnsafeMutableRawPointer,
         name: String,
@@ -291,6 +366,11 @@ final class HermesRustCore: @unchecked Sendable {
         guard let resultPtr else { return nil }
         defer { freeString(resultPtr) }
         return Self.decodeJSONObject(resultPtr)
+    }
+
+    private static func encodeJSONObject(_ object: [String: Any]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     private static func decodeJSONObject(_ ptr: UnsafeMutablePointer<CChar>) -> [String: Any]? {

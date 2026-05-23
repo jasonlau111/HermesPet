@@ -171,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 菜单栏图标：左键切换窗口，右键弹菜单（含"退出"）
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = Self.statusBarIcon(accessibilityDescription: "Hermes 桌宠")
+            button.image = Self.statusBarIcon(accessibilityDescription: "Jason hermes")
             button.imagePosition = .imageOnly
             button.action = #selector(handleStatusItemClick(_:))
             button.target = self
@@ -275,6 +275,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 每日早报 —— 检查今天有没有生成过，没有就在 3s 后用 morningBriefingBackend 生成一份
         MorningBriefingService.shared.generateIfNeeded(viewModel: vm)
+        // 周期回顾 / 成长时间线 —— Rust 后端聚合本地活动，自动保存到 ~/.hermespet/growth-timeline.json。
+        PeriodicReviewService.shared.generateIfNeeded(viewModel: vm)
 
         // 监听任务完成 → 播放清脆"叮~"音效
         NotificationCenter.default.addObserver(
@@ -295,6 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// App 退出前：杀掉所有还在跑的 Claude/Codex 子进程，避免僵尸进程
     func applicationWillTerminate(_ notification: Notification) {
+        StorageManager.shared.flushPendingSave()
         // 先关 ReasoningProxy（OpenCodeServerManager 之前关，让正在 forward 的请求有机会收尾）
         ReasoningProxy.shared.stop()
         // 优雅 terminate opencode server（让它有机会 flush SQLite）
@@ -369,6 +372,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         briefingItem.target = self
         menu.addItem(briefingItem)
 
+        let reviewItem = NSMenuItem(title: "📈 立即生成周期回顾", action: #selector(menuGeneratePeriodicReview), keyEquivalent: "")
+        reviewItem.target = self
+        menu.addItem(reviewItem)
+
         let exportPinsItem = NSMenuItem(title: "📌 导出全部 Pin 为 Markdown", action: #selector(menuExportPins), keyEquivalent: "")
         exportPinsItem.target = self
         exportPinsItem.isEnabled = !PinStore.shared.pins.isEmpty
@@ -390,7 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let quitItem = NSMenuItem(title: "退出 Hermes 桌宠", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "退出 Jason hermes", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -406,6 +413,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuGenerateBriefing() {
         guard let vm = viewModel else { return }
         MorningBriefingService.shared.generateNow(viewModel: vm)
+    }
+
+    @objc private func menuGeneratePeriodicReview() {
+        guard let vm = viewModel else { return }
+        Task { @MainActor in
+            do {
+                _ = try await PeriodicReviewService.shared.generateNow(viewModel: vm)
+            } catch {
+                vm.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     @objc private func menuExportPins() {
@@ -573,7 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .disconnected:
                 button.image = Self.statusBarIcon(accessibilityDescription: "Hermes — 已断开")
             case .unknown:
-                button.image = Self.statusBarIcon(accessibilityDescription: "Hermes 桌宠")
+                button.image = Self.statusBarIcon(accessibilityDescription: "Jason hermes")
             }
             button.contentTintColor = nil
         }

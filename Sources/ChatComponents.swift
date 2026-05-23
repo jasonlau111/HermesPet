@@ -106,7 +106,8 @@ struct MessageBubbleView: View {
         }
         .padding(.horizontal, 4)
         .onHover { hovering in
-            withAnimation(AnimTok.snappy) { isHovering = hovering }
+            guard isHovering != hovering else { return }
+            isHovering = hovering
         }
     }
 
@@ -332,9 +333,6 @@ struct MessageBubbleView: View {
                 }
             }
             .offset(x: isUser ? -6 : 6, y: -6)
-            .transition(.opacity.combined(with: .scale(scale: 0.85)))
-            .animation(AnimTok.snappy, value: didCopy)
-            .animation(AnimTok.snappy, value: didPin)
         }
     }
 
@@ -626,7 +624,8 @@ struct SendButton: View {
         .disabled(!isActive)
         .help(isLoading ? "取消" : "发送")
         .onHover { hovering in
-            withAnimation(AnimTok.snappy) { isHovering = hovering }
+            guard isHovering != hovering else { return }
+            isHovering = hovering
         }
         .animation(AnimTok.snappy, value: isLoading)
         .animation(AnimTok.snappy, value: canSend)

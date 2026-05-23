@@ -1,7 +1,7 @@
 import Foundation
 
 // MARK: - Chat Models
-struct ChatMessage: Identifiable, Codable, Equatable {
+struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     let id: String
     var role: MessageRole
     var content: String
@@ -74,7 +74,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     }
 }
 
-enum MessageRole: String, Codable {
+enum MessageRole: String, Codable, Sendable {
     case user
     case assistant
     case system
@@ -95,12 +95,12 @@ enum MessageRole: String, Codable {
 /// 对话类型 —— `.chat` 是普通聊天对话，`.canvas` 是画布工作区。
 /// 同样存在 conversations 数组里、共享顶部胶囊条 / ⌘1-8 直达 / 多通道并发，
 /// 但主区域 UI 由 ConversationKind 决定（CanvasView vs MessagesView）
-enum ConversationKind: String, Codable {
+enum ConversationKind: String, Codable, Sendable {
     case chat
     case canvas
 }
 
-struct Conversation: Identifiable, Codable, Equatable {
+struct Conversation: Identifiable, Codable, Equatable, Sendable {
     let id: String
     var title: String           // 默认 "对话 N"，发完第一条用户消息后自动取前 8 个字
     var messages: [ChatMessage]
@@ -185,7 +185,7 @@ struct Conversation: Identifiable, Codable, Equatable {
 ///
 /// 画布作为 Conversation.canvas 字段持久化，跟普通聊天一起存在
 /// `~/.hermespet/conversations.json`，图片复用现有 `~/.hermespet/images/` 机制
-struct CanvasBoard: Codable, Equatable {
+struct CanvasBoard: Codable, Equatable, Sendable {
     /// 画布唯一 id
     let id: String
     /// 用户输入的主题（如"可口可乐"）
@@ -242,7 +242,7 @@ struct CanvasBoard: Codable, Equatable {
 }
 
 /// 画布里的单个卡片 —— 可能是图（heroImage / sceneImage）或文（title / sellingPoint / cta / text）
-struct CanvasElement: Identifiable, Codable, Equatable {
+struct CanvasElement: Identifiable, Codable, Equatable, Sendable {
     let id: String
     /// 卡片类型 —— 决定渲染方式 + 走哪个 client 生成
     var kind: CanvasElementKind
@@ -282,7 +282,7 @@ struct CanvasElement: Identifiable, Codable, Equatable {
 }
 
 /// 画布卡片的类型 —— 决定走哪个 client 生成、UI 长什么样
-enum CanvasElementKind: String, Codable, Hashable {
+enum CanvasElementKind: String, Codable, Hashable, Sendable {
     case heroImage      // 产品主图（大图）
     case sceneImage     // 使用场景图（中图）
     case title          // 标题文案（粗体大字）
@@ -292,7 +292,7 @@ enum CanvasElementKind: String, Codable, Hashable {
 }
 
 /// 画布卡片的生成状态
-enum CanvasElementStatus: String, Codable {
+enum CanvasElementStatus: String, Codable, Sendable {
     case pending      // 还没开始（刚规划完，等排队）
     case generating   // 正在生成（UI 显示 skeleton 闪烁）
     case done         // 完成
@@ -310,7 +310,7 @@ let kMaxConversations = 8
 /// - **OpenClaw**：npm 装的 OpenAI 兼容 gateway（373k stars，"fomo 龙虾"），自动读 ~/.openclaw/openclaw.json
 ///   零配置接入，model 字段是 agent id（"openclaw" / "openclaw/default"）
 /// - **Claude Code CLI** / **OpenAI Codex CLI**：本地子进程，能读写文件 / 跑命令 / 生图
-enum AgentMode: String, Codable, CaseIterable, Identifiable {
+enum AgentMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case hermes
     case directAPI  = "direct_api"
     case openclaw   = "openclaw"

@@ -9,6 +9,7 @@ final class ProfileSettingsStore {
     var userDisplayName: String
     private var userAvatarPath: String
     private var modeProfiles: [String: ModeProfile]
+    private var avatarCache: [ProfileAvatarTarget: CachedAvatar] = [:]
     private var revision: Int = 0
 
     private init() {
@@ -36,7 +37,12 @@ final class ProfileSettingsStore {
     func avatarImage(for target: ProfileAvatarTarget) -> NSImage? {
         _ = revision
         guard let path = avatarPath(for: target), !path.isEmpty else { return nil }
-        return NSImage(contentsOfFile: path)
+        if let cached = avatarCache[target], cached.path == path {
+            return cached.image
+        }
+        let image = NSImage(contentsOfFile: path)
+        avatarCache[target] = CachedAvatar(path: path, image: image)
+        return image
     }
 
     func updateUserDisplayName(_ value: String) {
@@ -96,6 +102,7 @@ final class ProfileSettingsStore {
             profile.avatarPath = path
             modeProfiles[mode.rawValue] = profile
         }
+        avatarCache[target] = nil
         revision += 1
         save()
     }
@@ -110,6 +117,7 @@ final class ProfileSettingsStore {
             profile.avatarPath = ""
             modeProfiles[mode.rawValue] = profile
         }
+        avatarCache[target] = nil
         revision += 1
         save()
     }
@@ -179,6 +187,11 @@ final class ProfileSettingsStore {
     private struct ModeProfile: Codable {
         var displayName: String = ""
         var avatarPath: String = ""
+    }
+
+    private struct CachedAvatar {
+        let path: String
+        let image: NSImage?
     }
 
     private static let profileDirectory = URL(fileURLWithPath: NSHomeDirectory())

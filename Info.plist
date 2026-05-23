@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
-	<string>Hermes 桌宠</string>
+	<string>Jason hermes</string>
 	<key>CFBundleExecutable</key>
 	<string>HermesPet</string>
 	<key>CFBundleIconFile</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>HermesPet</string>
+	<string>Jason hermes</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -29,12 +29,12 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>© Nous Research</string>
 	<key>NSInputMonitoringUsageDescription</key>
-	<string>Hermes 桌宠 仅统计键盘按键次数（不读取按键内容），用来理解你的工作活动节奏，让 AI 能感知你在做什么</string>
+	<string>Jason hermes 仅统计键盘按键次数（不读取按键内容），用来理解你的工作活动节奏，让 AI 能感知你在做什么</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Hermes 桌宠 需要使用麦克风以实现"按住说话"（Cmd+Shift+V）语音输入</string>
+	<string>Jason hermes 需要使用麦克风以实现"按住说话"（Cmd+Shift+V）语音输入</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Hermes 桌宠 需要使用语音识别把你的语音转成文字后发送给 AI</string>
+	<string>Jason hermes 需要使用语音识别把你的语音转成文字后发送给 AI</string>
 </dict>
 </plist>
