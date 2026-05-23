@@ -240,8 +240,6 @@ eta 是可选的预估时长（"30m" / "1h" / "5m"）。**只在确实是任务�
             process.executableURL = URL(fileURLWithPath: executablePath)
 
             // 不再用 --continue，每次新 session
-            // --permission-mode acceptEdits：非交互模式下自动允许 Read/Write/Edit 工具，
-            //   否则 Claude 看不到附带的图片，也写不出桌面文件
             // --add-dir：显式把 Cache（截图存放地）和 Desktop（用户常用保存路径）
             //   加进可访问目录白名单
             let cacheDir = Self.hermesPetCacheDir.path
@@ -252,10 +250,18 @@ eta 是可选的预估时长（"30m" / "1h" / "5m"）。**只在确实是任务�
                 "--include-partial-messages",
                 "--verbose",                  // stream-json 必须配 --verbose
                 "--no-session-persistence",   // 不保存 session 文件，桌宠自己管历史
-                "--permission-mode", "acceptEdits",
                 "--add-dir", cacheDir,
                 "--add-dir", desktopDir
             ]
+            if UserDefaults.standard.bool(forKey: "permissionUIEnabled") {
+                // 保留 HermesPet 权限弹窗：非交互模式下先自动允许读写编辑，
+                // 其他工具仍可由 Claude/Codex hook 转给本地权限 UI。
+                args.append(contentsOf: ["--permission-mode", "acceptEdits"])
+            } else {
+                // 用户本机 `cc` 是 zsh alias：`claude --dangerously-skip-permissions`。
+                // Process 不能直接执行 alias，且 `/usr/bin/cc` 是 C 编译器；这里等价展开。
+                args.append("--dangerously-skip-permissions")
+            }
             // 每个拖入文档的父目录都追加进 --add-dir，让 Claude 的 Read 工具能读到
             // dedupe 已在 collectExtraAddDirs 里做了；跟 cacheDir/desktopDir 重复无害
             for dir in extraAddDirs {
